@@ -1,0 +1,15 @@
+{
+  "model": {"display_name": "Fable 5.1"},
+  "workspace": {"current_dir": "$HOME/source/repos/utils/sill"},
+  "context_window": {"used_percentage": 61.2, "total_input_tokens": 122400, "context_window_size": 200000},
+  "effort": {"level": "high"},
+  "session_name": "billing-fix",
+  "version": "2.1.282",
+  "rate_limits": {
+    "five_hour": {"used_percentage": 94, "resets_at": 0},
+    "seven_day": {"used_percentage": 72, "resets_at": 0}
+  },
+  "prompt_cache": {"warm": true, "caching_observed": true, "expires_at": 0},
+  "worktree": {"name": "feature/billing"},
+  "pr": {"number": 42, "review_state": "approved"}
+}

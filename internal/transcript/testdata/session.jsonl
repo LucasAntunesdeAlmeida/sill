@@ -1,0 +1,14 @@
+{"type":"summary","summary":"records without a timestamp come first"}
+{"type":"system","subtype":"compact_boundary","content":"Conversation compacted","compactMetadata":{"trigger":"manual","preTokens":204479,"postTokens":9804},"timestamp":"2026-09-25T10:00:00.000Z"}
+{"type":"assistant","timestamp":"2026-09-25T10:01:00.000Z","message":{"content":[{"type":"tool_use","id":"toolu_A","name":"Agent","input":{"subagent_type":"Explore","prompt":"find x"}}]}}
+{"type":"user","timestamp":"2026-09-25T10:01:01.000Z","message":{"content":[{"tool_use_id":"toolu_A","type":"tool_result","content":[{"type":"text","text":"Async agent launched successfully. (This tool result is internal metadata)\nagentId: aaa (internal ID)"}]}]}}
+{"type":"queue-operation","operation":"enqueue","timestamp":"2026-09-25T10:02:00.000Z","content":"<task-notification>\n<task-id>aaa</task-id>\n<tool-use-id>toolu_A</tool-use-id>\n<status>completed</status>\n<summary>Agent finished</summary>\n</task-notification>"}
+{"type":"assistant","timestamp":"2026-09-25T10:03:00.000Z","message":{"content":[{"type":"tool_use","id":"toolu_B","name":"Agent","input":{"subagent_type":"general-purpose","prompt":"still running"}}]}}
+{"type":"user","timestamp":"2026-09-25T10:03:01.000Z","message":{"content":[{"tool_use_id":"toolu_B","type":"tool_result","content":[{"type":"text","text":"Async agent launched successfully."}]}]}}
+{"type":"assistant","timestamp":"2026-09-25T10:04:00.000Z","message":{"content":[{"type":"tool_use","id":"toolu_C","name":"Task","input":{"prompt":"old synchronous agent"}}]}}
+{"type":"user","timestamp":"2026-09-25T10:05:00.000Z","message":{"content":[{"tool_use_id":"toolu_C","type":"tool_result","content":"The agent's actual report, so it is done."}]}}
+{"type":"assistant","timestamp":"2026-09-25T10:06:00.000Z","message":{"content":[{"type":"tool_use","id":"toolu_D","name":"Agent","input":{}},{"type":"tool_use","id":"toolu_E","name":"Agent","input":{}}]}}
+{"type":"user","timestamp":"2026-09-25T10:06:01.000Z","message":{"content":[{"tool_use_id":"toolu_D","type":"tool_result","content":[{"type":"text","text":"Async agent launched successfully."}]},{"tool_use_id":"toolu_E","type":"tool_result","content":[{"type":"text","text":"Async agent launched successfully."}]}]}}
+{"type":"user","timestamp":"2026-09-25T10:07:00.000Z","attachment":{"type":"queued_command","prompt":"<task-notification>\n<task-id>eee</task-id>\n<tool-use-id>toolu_E</tool-use-id>\n<status>completed</status>\n</task-notification>"}}
+{"attachment":{"type":"prompt_snapshot","systemPrompt":["a system prompt snapshot quoting \"type\":\"tool_use\",\"id\":\"toolu_Z\",\"name\":\"Agent\" in escaped JSON must not count"]},"timestamp":"2026-09-25T10:08:00.000Z"}
+{"type":"system","subtype":"compact_boundary","content":"Conversation compacted","timestamp":"2026-09-25T10:09:00.000Z"}
