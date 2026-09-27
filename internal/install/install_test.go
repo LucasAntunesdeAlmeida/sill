@@ -134,7 +134,8 @@ func TestRunAndUninstall(t *testing.T) {
 	if err := os.WriteFile(exe, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(`{"model": "x"}`), 0o644); err != nil {
+	const original = `{"model": "x"}`
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(original), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "statusline-command.sh"), []byte("old"), 0o644); err != nil {
@@ -170,9 +171,12 @@ func TestRunAndUninstall(t *testing.T) {
 	if !strings.HasPrefix(cmd, `"`) || strings.Contains(cmd, `\`) {
 		t.Errorf("command should be quoted with forward slashes: %q", cmd)
 	}
-	backups, _ := filepath.Glob(filepath.Join(dir, "settings.json.*.bak"))
-	if len(backups) != 1 {
-		t.Errorf("backups = %v", backups)
+	backup, err := os.ReadFile(filepath.Join(dir, BackupName))
+	if err != nil || string(backup) != original {
+		t.Errorf("backup = %q, %v; want the original file", backup, err)
+	}
+	if stray, _ := filepath.Glob(filepath.Join(dir, "settings.json.*.bak")); len(stray) != 1 {
+		t.Errorf("expected exactly one backup file, got %v", stray)
 	}
 
 	out.Reset()
@@ -182,9 +186,8 @@ func TestRunAndUninstall(t *testing.T) {
 	if !strings.Contains(out.String(), "already points") {
 		t.Errorf("second run:\n%s", out.String())
 	}
-	backups, _ = filepath.Glob(filepath.Join(dir, "settings.json.*.bak"))
-	if len(backups) != 1 {
-		t.Errorf("no-op run must not back up again, got %v", backups)
+	if again, _ := os.ReadFile(filepath.Join(dir, BackupName)); string(again) != original {
+		t.Errorf("no-op run must not touch the backup, got %q", again)
 	}
 
 	out.Reset()

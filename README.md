@@ -21,7 +21,7 @@ sill install
 Or download a binary from the [releases page](https://github.com/LucasAntunesdeAlmeida/sill/releases),
 put it somewhere on your PATH, and run `sill install`.
 
-`sill install` writes the `statusLine` entry into `~/.claude/settings.json` (backed up first, other
+`sill install` writes the `statusLine` entry into `~/.claude/settings.json` (backed up first to `settings.json.sill.bak`, other
 settings untouched) pointing at the binary where it is. Restart Claude Code. The binary needs to be on
 your PATH only so that `sill set` is easy to type; `go install` puts it in `$GOPATH/bin`, which usually is.
 It honors `CLAUDE_CONFIG_DIR` if you use one. `sill uninstall` removes the entry again.
