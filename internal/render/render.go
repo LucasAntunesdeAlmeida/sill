@@ -125,11 +125,17 @@ func (r *renderer) fit(spec string) string {
 
 var ansiSeq = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
+// visibleWidth is the number of terminal columns s takes once its colors are removed.
 func visibleWidth(s string) int {
-	return utf8.RuneCountInString(ansiSeq.ReplaceAllString(s, ""))
+	w := 0
+	for _, r := range ansiSeq.ReplaceAllString(s, "") {
+		w += runeWidth(r)
+	}
+	return w
 }
 
-// truncate keeps the first n visible characters, copying escape sequences through.
+// truncate keeps the first n visible columns, copying escape sequences through. A wide
+// character that would straddle the edge is left out.
 func truncate(s string, n int) string {
 	var b strings.Builder
 	seen := 0
@@ -139,15 +145,55 @@ func truncate(s string, n int) string {
 			i += loc[1]
 			continue
 		}
-		if seen >= n {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		w := runeWidth(r)
+		if seen+w > n {
 			break
 		}
-		_, size := utf8.DecodeRuneInString(s[i:])
 		b.WriteString(s[i : i+size])
 		i += size
-		seen++
+		seen += w
 	}
 	return b.String()
+}
+
+// runeWidth is how many columns a terminal gives a rune: none for combining marks and
+// invisible formatting, two for East Asian wide and fullwidth characters and emoji, one
+// otherwise. sill prints only ASCII itself; this is for the folder, branch and session
+// names it shows.
+func runeWidth(r rune) int {
+	switch {
+	case r < 0x300:
+		return 1
+	case unicode.In(r, unicode.Mn, unicode.Me, unicode.Cf):
+		return 0
+	case r >= 0x1100 && unicode.Is(wide, r):
+		return 2
+	}
+	return 1
+}
+
+// wide holds the East Asian Wide (W) and Fullwidth (F) ranges of Unicode's
+// EastAsianWidth.txt, which is also where emoji with default emoji presentation are.
+var wide = &unicode.RangeTable{
+	R16: []unicode.Range16{
+		{0x1100, 0x115f, 1}, {0x231a, 0x231b, 1}, {0x2329, 0x232a, 1}, {0x23e9, 0x23ec, 1},
+		{0x23f0, 0x23f3, 3}, {0x25fd, 0x25fe, 1}, {0x2614, 0x2615, 1}, {0x2648, 0x2653, 1},
+		{0x267f, 0x2693, 20}, {0x26a1, 0x26aa, 9}, {0x26ab, 0x26bd, 18}, {0x26be, 0x26c4, 6},
+		{0x26c5, 0x26ce, 9}, {0x26d4, 0x26ea, 22}, {0x26f2, 0x26f3, 1}, {0x26f5, 0x26fa, 5},
+		{0x26fd, 0x2705, 8}, {0x270a, 0x270b, 1}, {0x2728, 0x274c, 36}, {0x274e, 0x2753, 5},
+		{0x2754, 0x2755, 1}, {0x2757, 0x2795, 62}, {0x2796, 0x2797, 1}, {0x27b0, 0x27bf, 15},
+		{0x2b1b, 0x2b1c, 1}, {0x2b50, 0x2b55, 5}, {0x2e80, 0x303e, 1}, {0x3041, 0x33ff, 1},
+		{0x3400, 0x4dbf, 1}, {0x4e00, 0xa4cf, 1}, {0xa960, 0xa97f, 1}, {0xac00, 0xd7a3, 1},
+		{0xf900, 0xfaff, 1}, {0xfe10, 0xfe19, 1}, {0xfe30, 0xfe6f, 1}, {0xff00, 0xff60, 1},
+		{0xffe0, 0xffe6, 1},
+	},
+	R32: []unicode.Range32{
+		{0x16fe0, 0x16fe4, 1}, {0x17000, 0x18cff, 1}, {0x1b000, 0x1b2ff, 1}, {0x1f004, 0x1f0cf, 203},
+		{0x1f18e, 0x1f191, 3}, {0x1f192, 0x1f19a, 1}, {0x1f200, 0x1f251, 1}, {0x1f300, 0x1f64f, 1},
+		{0x1f680, 0x1f6ff, 1}, {0x1f7e0, 0x1f7eb, 1}, {0x1f900, 0x1f9ff, 1}, {0x1fa70, 0x1faff, 1},
+		{0x20000, 0x2fffd, 1}, {0x30000, 0x3fffd, 1},
+	},
 }
 
 // Separators between segments, weakest first. An empty segment drops the separator

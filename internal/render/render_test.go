@@ -226,6 +226,54 @@ func TestFitKeepsEscapesBalanced(t *testing.T) {
 	}
 }
 
+func TestRuneWidth(t *testing.T) {
+	cases := map[rune]int{
+		'a': 1, '~': 1, 'é': 1, '́': 0, '​': 0, '‍': 0,
+		'中': 2, '가': 2, 'あ': 2, 'Ａ': 2, '\U0001F600': 2, '✅': 2,
+		'⭐': 2, '⚡': 2, '☀': 1, '→': 1, 'Ж': 1, '\U00020000': 2,
+	}
+	for r, want := range cases {
+		if got := runeWidth(r); got != want {
+			t.Errorf("runeWidth(%U) = %d, want %d", r, got, want)
+		}
+	}
+	// unicode.Is binary-searches the table, so it has to stay sorted and disjoint.
+	last := rune(-1)
+	for _, r := range wide.R16 {
+		if rune(r.Lo) <= last || r.Hi < r.Lo || (r.Hi-r.Lo)%r.Stride != 0 {
+			t.Errorf("bad range %04x-%04x/%d", r.Lo, r.Hi, r.Stride)
+		}
+		last = rune(r.Hi)
+	}
+	for _, r := range wide.R32 {
+		if rune(r.Lo) <= last || r.Hi < r.Lo || (r.Hi-r.Lo)%r.Stride != 0 {
+			t.Errorf("bad range %05x-%05x/%d", r.Lo, r.Hi, r.Stride)
+		}
+		last = rune(r.Hi)
+	}
+}
+
+// A wide session name must count double, or the fitted line wraps anyway.
+func TestFitWideText(t *testing.T) {
+	p, err := payload.Parse([]byte(`{"model":{"display_name":"M"},"session_name":"中文中文中文中文中文"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := config.New()
+	for _, width := range []int{8, 15, 25} {
+		got := Render(p, State{Settings: s, Layout: s.Layout(), Width: width})
+		if w := visibleWidth(got); w > width-1 {
+			t.Errorf("width %d: %q takes %d columns", width, got, w)
+		}
+	}
+	if got := truncate("ab中文", 3); got != "ab" {
+		t.Errorf("a wide character must not straddle the edge, got %q", got)
+	}
+	if got := visibleWidth(Red + "中á" + Reset); got != 3 {
+		t.Errorf("visibleWidth = %d, want 3", got)
+	}
+}
+
 func TestTruncate(t *testing.T) {
 	in := Red + "abc" + Reset + "def"
 	if got := truncate(in, 4); got != Red+"abc"+Reset+"d" {
