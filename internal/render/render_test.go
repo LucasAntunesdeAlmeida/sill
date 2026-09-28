@@ -27,7 +27,7 @@ func fixedNow(t *testing.T) time.Time {
 
 // samplePayload has every segment populated, with reset times relative to base:
 // 5h resets in 80 minutes, 7d in 50 hours, the cache goes cold in 80 minutes.
-func samplePayload(t *testing.T, base time.Time) *payload.Payload {
+func samplePayload(t testing.TB, base time.Time) *payload.Payload {
 	t.Helper()
 	epoch := func(d time.Duration) int64 { return base.Add(d).Unix() }
 	doc := fmt.Sprintf(`{
@@ -428,6 +428,26 @@ func FuzzRender(f *testing.F) {
 			}
 		}
 	})
+}
+
+// BenchmarkRender is the formatting cost of one render with every segment on, fitted to a
+// terminal narrow enough to run most degrade steps.
+func BenchmarkRender(b *testing.B) {
+	for _, width := range []int{0, 60} {
+		b.Run(fmt.Sprintf("width=%d", width), func(b *testing.B) {
+			base := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
+			p := samplePayload(b, base)
+			s := config.New()
+			for _, k := range []string{"cache", "version", "duration"} {
+				_ = s.Set(k, "on")
+			}
+			st := sampleState(s, base)
+			st.Width = width
+			for b.Loop() {
+				Render(p, st)
+			}
+		})
+	}
 }
 
 func TestPct(t *testing.T) {
