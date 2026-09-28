@@ -164,6 +164,25 @@ func TestIsTempBuild(t *testing.T) {
 	}
 }
 
+func TestCurrent(t *testing.T) {
+	dir := t.TempDir()
+	if cmd, err := Current(dir); cmd != "" || err != nil {
+		t.Errorf("no settings.json: %q, %v", cmd, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(existing), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if cmd, err := Current(dir); cmd != "powershell -File old.ps1" || err != nil {
+		t.Errorf("existing: %q, %v", cmd, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(`{"a":`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Current(dir); err == nil {
+		t.Error("broken settings.json should be reported")
+	}
+}
+
 func TestParseEntriesIsStrict(t *testing.T) {
 	for _, doc := range []string{`{"a": 1`, `{"a": 1}{"b": 2}`, `{"a": 1} x`} {
 		if _, err := parseEntries([]byte(doc)); err == nil {

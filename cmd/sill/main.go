@@ -49,6 +49,7 @@ Usage:
   sill set <key> <value>  change options, e.g. sill set layout full cache on
   sill unset <key>...     back to the default, e.g. sill unset cache width
   sill demo               render a sample payload with the current settings
+  sill doctor             check the setup and what a render sees
   sill version            print the version
 
 Inside Claude Code, run any of these without a model turn:
@@ -94,6 +95,8 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return unset(args[1:], stdout)
 	case "demo":
 		return demo(stdout)
+	case "doctor":
+		return doctor(stdout)
 	case "version", "-v", "--version":
 		_, err := fmt.Fprintln(stdout, "sill", versionString())
 		return err

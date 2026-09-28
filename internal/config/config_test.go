@@ -75,11 +75,49 @@ func TestPresetsNameRealSegments(t *testing.T) {
 				if tok == "|" || tok == "/" {
 					continue
 				}
-				if o := Find(tok); o == nil || o.Kind != Bool {
+				if !IsSegment(tok) {
 					t.Errorf("preset %s names %q, which is not a segment", name, tok)
 				}
 			}
 		}
+	}
+}
+
+func TestIsSegment(t *testing.T) {
+	for name, want := range map[string]bool{"ctx": true, "path": true, "color": false, "dirty": false, "layout": false, "width": false, "bogus": false} {
+		if got := IsSegment(name); got != want {
+			t.Errorf("IsSegment(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestCheck(t *testing.T) {
+	problems, err := Check([]byte(`{"colour": false, "git": "sideways", "pr": [1], "layout": "custom", "lines": ["path bogus | model", 3, "dirty"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{ // in key order
+		`unknown option "colour", ignored`,
+		`git takes on or off, not "sideways", using the default`,
+		`line 1 names "bogus", which is not a segment`,
+		`line 2 is not a string, ignored`,
+		`line 3 names "dirty", which is not a segment`,
+		`pr has a value of the wrong type, using the default`,
+	}
+	if strings.Join(problems, "\n") != strings.Join(want, "\n") {
+		t.Errorf("problems:\n%s\nwant:\n%s", strings.Join(problems, "\n"), strings.Join(want, "\n"))
+	}
+	if problems, _ := Check([]byte(`{"layout": "custom"}`)); len(problems) != 1 || !strings.Contains(problems[0], "no \"lines\"") {
+		t.Errorf("custom without lines: %q", problems)
+	}
+	if problems, _ := Check([]byte(`{"lines": "path"}`)); len(problems) != 1 {
+		t.Errorf("lines as a string: %q", problems)
+	}
+	if problems, err := Check([]byte(`{"ctx": false, "width": 90}`)); err != nil || len(problems) != 0 {
+		t.Errorf("clean file: %q, %v", problems, err)
+	}
+	if _, err := Check([]byte(`{bad`)); err == nil {
+		t.Error("broken JSON should be an error")
 	}
 }
 

@@ -249,7 +249,7 @@ func (r *renderer) line(spec string) string {
 
 // segment renders one named segment, or "" when it is off or has nothing to show.
 func (r *renderer) segment(name string) string {
-	if o := config.Find(name); o == nil || o.Kind != config.Bool || !r.st.Settings.On(name) || r.dropped[name] {
+	if !config.IsSegment(name) || !r.st.Settings.On(name) || r.dropped[name] {
 		return ""
 	}
 	p := r.p

@@ -86,6 +86,25 @@ func IsTempBuild(exe string) bool {
 	return false
 }
 
+// Current returns the statusLine command in dir/settings.json, or "" when there is none.
+func Current(dir string) (string, error) {
+	raw, err := os.ReadFile(filepath.Join(dir, "settings.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	entries, err := parseEntries(raw)
+	if err != nil {
+		return "", fmt.Errorf("settings.json: %w", err)
+	}
+	_, current := findStatusLine(entries)
+	var cmd string
+	_ = json.Unmarshal(current["command"], &cmd)
+	return cmd, nil
+}
+
 // CommandPath is the program a statusLine command runs: the quoted path sill install
 // writes, or the first word of a command written by hand.
 func CommandPath(cmd string) string {

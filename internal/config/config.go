@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -66,6 +67,16 @@ func Find(name string) *Option {
 		}
 	}
 	return nil
+}
+
+// modifiers are the boolean options that change how the line looks instead of naming a
+// segment, so they cannot be placed on a line.
+var modifiers = map[string]bool{"color": true, "dirty": true}
+
+// IsSegment reports whether name can be placed on a line.
+func IsSegment(name string) bool {
+	o := Find(name)
+	return o != nil && o.Kind == Bool && !modifiers[name]
 }
 
 // Layout says which segments go on which line. A line is segment names in order, with
@@ -219,23 +230,31 @@ func Load() (Settings, error) {
 // Parse applies a settings document. Unknown keys are ignored and invalid values keep
 // the default, so an old file never breaks a newer sill.
 func (s *Settings) Parse(data []byte) error {
+	_, err := s.parse(data)
+	return err
+}
+
+// Check reports what Parse would silently ignore in a settings document: unknown keys,
+// invalid values and names in "lines" that are not segments.
+func Check(data []byte) ([]string, error) {
+	s := New()
+	return s.parse(data)
+}
+
+func (s *Settings) parse(data []byte) ([]string, error) {
 	var raw map[string]any
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
+		return nil, err
 	}
-	for k, v := range raw {
+	var problems []string
+	for _, k := range sortedKeys(raw) {
+		v := raw[k]
 		if k == "lines" {
-			s.Lines = nil
-			if items, ok := v.([]any); ok {
-				for _, it := range items {
-					if line, ok := it.(string); ok && strings.TrimSpace(line) != "" {
-						s.Lines = append(s.Lines, line)
-					}
-				}
-			}
+			problems = append(problems, s.parseLines(v)...)
 			continue
 		}
 		if Find(k) == nil {
+			problems = append(problems, fmt.Sprintf("unknown option %q, ignored", k))
 			continue
 		}
 		var text string
@@ -250,11 +269,52 @@ func (s *Settings) Parse(data []byte) error {
 		case float64:
 			text = strconv.Itoa(int(t))
 		default:
+			problems = append(problems, fmt.Sprintf("%s has a value of the wrong type, using the default", k))
 			continue
 		}
-		_ = s.Set(k, text)
+		if err := s.Set(k, text); err != nil {
+			problems = append(problems, err.Error()+", using the default")
+		}
 	}
-	return nil
+	if s.Get("layout") == "custom" && len(s.Lines) == 0 {
+		problems = append(problems, `layout is custom but there are no "lines", showing compact`)
+	}
+	return problems, nil
+}
+
+func (s *Settings) parseLines(v any) []string {
+	s.Lines = nil
+	items, ok := v.([]any)
+	if !ok {
+		return []string{`"lines" should be a list of strings`}
+	}
+	var problems []string
+	for i, it := range items {
+		line, ok := it.(string)
+		if !ok {
+			problems = append(problems, fmt.Sprintf("line %d is not a string, ignored", i+1))
+			continue
+		}
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		for tok := range strings.FieldsSeq(line) {
+			if tok != "|" && tok != "/" && !IsSegment(tok) {
+				problems = append(problems, fmt.Sprintf("line %d names %q, which is not a segment", i+1, tok))
+			}
+		}
+		s.Lines = append(s.Lines, line)
+	}
+	return problems
+}
+
+func sortedKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
 }
 
 // Save writes the explicitly set options in table order. The file is replaced in one step
