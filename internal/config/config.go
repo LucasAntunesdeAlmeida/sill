@@ -267,13 +267,13 @@ func (s Settings) Marshal() []byte {
 		case Int:
 			entries = append(entries, fmt.Sprintf("  %q: %s", o.Name, v))
 		default:
-			entries = append(entries, fmt.Sprintf("  %q: %q", o.Name, v))
+			entries = append(entries, fmt.Sprintf("  %q: %s", o.Name, jsonString(v)))
 		}
 	}
 	if len(s.Lines) > 0 {
 		quoted := make([]string, len(s.Lines))
 		for i, l := range s.Lines {
-			quoted[i] = "    " + fmt.Sprintf("%q", l)
+			quoted[i] = "    " + jsonString(l)
 		}
 		entries = append(entries, "  \"lines\": [\n"+strings.Join(quoted, ",\n")+"\n  ]")
 	}
@@ -285,6 +285,15 @@ func (s Settings) Marshal() []byte {
 	}
 	b.WriteString("}\n")
 	return []byte(b.String())
+}
+
+// jsonString quotes s as a JSON string. Go's %q is not JSON: it writes \x01 and \U escapes.
+func jsonString(s string) string {
+	var b strings.Builder
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(s)
+	return strings.TrimSuffix(b.String(), "\n")
 }
 
 // Describe renders the options table with current values.

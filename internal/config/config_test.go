@@ -148,3 +148,24 @@ func TestDescribe(t *testing.T) {
 		}
 	}
 }
+
+func FuzzParse(f *testing.F) {
+	f.Add([]byte(`{"ctx": false, "reset": "both", "width": 100, "layout": "custom", "lines": ["path git", "ctx"]}`))
+	f.Add([]byte(`{"lines": [1, null, "x"], "width": -3, "color": "maybe"}`))
+	f.Add([]byte(`{}`))
+	f.Add([]byte(`{"lines": ["path\u0001 <git> & \"model\""]}`)) // %q once wrote this as invalid JSON
+	f.Fuzz(func(t *testing.T, data []byte) {
+		s := New()
+		if s.Parse(data) != nil {
+			return
+		}
+		// Whatever was accepted survives a save and a reload unchanged.
+		again := New()
+		if err := again.Parse(s.Marshal()); err != nil {
+			t.Fatalf("Marshal produced unreadable JSON: %v\n%s", err, s.Marshal())
+		}
+		if string(again.Marshal()) != string(s.Marshal()) {
+			t.Fatalf("round trip changed the settings:\n%s\n%s", s.Marshal(), again.Marshal())
+		}
+	})
+}
