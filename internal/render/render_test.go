@@ -228,9 +228,9 @@ func TestFitKeepsEscapesBalanced(t *testing.T) {
 
 func TestRuneWidth(t *testing.T) {
 	cases := map[rune]int{
-		'a': 1, '~': 1, 'é': 1, '́': 0, '​': 0, '‍': 0,
-		'中': 2, '가': 2, 'あ': 2, 'Ａ': 2, '\U0001F600': 2, '✅': 2,
-		'⭐': 2, '⚡': 2, '☀': 1, '→': 1, 'Ж': 1, '\U00020000': 2,
+		'a': 1, '~': 1, '\u00e9': 1, '\u0301': 0, '\u200b': 0, '\u200d': 0,
+		'\u4e2d': 2, '\uac00': 2, '\u3042': 2, '\uff21': 2, '\U0001F600': 2, '\u2705': 2,
+		'\u2b50': 2, '\u26a1': 2, '\u2600': 1, '\u2192': 1, '\u0416': 1, '\U00020000': 2,
 	}
 	for r, want := range cases {
 		if got := runeWidth(r); got != want {
@@ -255,7 +255,7 @@ func TestRuneWidth(t *testing.T) {
 
 // A wide session name must count double, or the fitted line wraps anyway.
 func TestFitWideText(t *testing.T) {
-	p, err := payload.Parse([]byte(`{"model":{"display_name":"M"},"session_name":"中文中文中文中文中文"}`))
+	p, err := payload.Parse([]byte(`{"model":{"display_name":"M"},"session_name":"\u4e2d\u6587\u4e2d\u6587\u4e2d\u6587\u4e2d\u6587\u4e2d\u6587"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,10 +266,10 @@ func TestFitWideText(t *testing.T) {
 			t.Errorf("width %d: %q takes %d columns", width, got, w)
 		}
 	}
-	if got := truncate("ab中文", 3); got != "ab" {
+	if got := truncate("ab\u4e2d\u6587", 3); got != "ab" {
 		t.Errorf("a wide character must not straddle the edge, got %q", got)
 	}
-	if got := visibleWidth(Red + "中á" + Reset); got != 3 {
+	if got := visibleWidth(Red + "\u4e2da\u0301" + Reset); got != 3 {
 		t.Errorf("visibleWidth = %d, want 3", got)
 	}
 }
