@@ -104,8 +104,8 @@ func TestReadLines(t *testing.T) {
 		t.Errorf("blank lines: %q", got)
 	}
 	n, _ := readLines(strings.NewReader("a\nb\nc\n"), false, func(line []byte) bool { return string(line) != "b" })
-	if n != 4 {
-		t.Errorf("stopping at b should consume through b, got %d", n)
+	if n != 2 {
+		t.Errorf("declining b should consume only a, got %d", n)
 	}
 }
 

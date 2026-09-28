@@ -40,7 +40,7 @@ const maxRecord = 64 << 20
 // headRecords is how far Start looks for a first timestamp.
 const headRecords = 50
 
-// Scan reads the transcript once. Missing or unreadable files count as no activity.
+// Scan reads the whole transcript. Missing or unreadable files count as no activity.
 func Scan(path string) Activity {
 	if path == "" {
 		return Activity{}
@@ -136,8 +136,9 @@ func (s *scanner) activity() Activity {
 	return Activity{Agents: len(s.open), Compactions: s.compactions, Start: s.start}
 }
 
-// readLines calls fn with every line, without its newline, until fn returns false, and
-// returns the bytes consumed through the last complete line handed over. A line longer
+// readLines calls fn with every line, without its newline, until fn returns false to say
+// it stopped without taking that line, and returns the bytes consumed through the last
+// complete line taken. A line longer
 // than maxRecord is skipped whole and reading goes on after it: one huge tool result must
 // not hide everything that follows. A last line without a newline goes to fn only when
 // partial is set; it may still be being written.
@@ -167,12 +168,11 @@ func readLines(r io.Reader, partial bool, fn func(line []byte) bool) (int64, err
 				long = append(long, line...)
 				line = long
 			}
-			consumed += int64(size)
-			keepGoing := skipping || len(line) > maxRecord || fn(line)
-			long, size, skipping = long[:0], 0, false
-			if !keepGoing {
+			if !skipping && len(line) <= maxRecord && !fn(line) {
 				return consumed, nil
 			}
+			consumed += int64(size)
+			long, size, skipping = long[:0], 0, false
 		case io.EOF:
 			if partial && !skipping && size > 0 && size <= maxRecord {
 				fn(append(long, chunk...))
