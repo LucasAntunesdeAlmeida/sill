@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/LucasAntunesdeAlmeida/sill/internal/atomicfile"
 )
 
 // FileName is the settings file inside the Claude config directory.
@@ -242,12 +244,13 @@ func (s *Settings) Parse(data []byte) error {
 	return nil
 }
 
-// Save writes the explicitly set options in table order.
+// Save writes the explicitly set options in table order. The file is replaced in one step
+// so a render running at the same moment never reads half of it.
 func (s Settings) Save() error {
 	if err := os.MkdirAll(Dir(), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(Path(), s.Marshal(), 0o644)
+	return atomicfile.Write(Path(), s.Marshal(), 0o644)
 }
 
 // Marshal renders the settings document: booleans as JSON booleans, integers as numbers.

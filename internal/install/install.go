@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/LucasAntunesdeAlmeida/sill/internal/atomicfile"
 )
 
 // Run writes the statusLine entry of dir/settings.json so it runs exe. Other settings and
@@ -68,7 +70,8 @@ func Uninstall(dir string, out io.Writer) error {
 const BackupName = "settings.json.sill.bak"
 
 // edit reads settings.json, applies fn, and writes the result after saving the previous
-// content to BackupName when fn reports a change. A missing file is treated as empty.
+// content to BackupName when fn reports a change. A missing file is treated as empty. The
+// file is replaced in one step, so an interrupted install cannot leave it half written.
 func edit(dir string, fn func(raw []byte) ([]byte, bool, error)) (bool, error) {
 	path := filepath.Join(dir, "settings.json")
 	raw, err := os.ReadFile(path)
@@ -83,11 +86,11 @@ func edit(dir string, fn func(raw []byte) ([]byte, bool, error)) (bool, error) {
 		return false, nil
 	}
 	if raw != nil {
-		if err := os.WriteFile(filepath.Join(dir, BackupName), raw, 0o644); err != nil {
+		if err := atomicfile.Write(filepath.Join(dir, BackupName), raw, 0o644); err != nil {
 			return false, err
 		}
 	}
-	return true, os.WriteFile(path, updated, 0o644)
+	return true, atomicfile.Write(path, updated, 0o644)
 }
 
 type entry struct {
