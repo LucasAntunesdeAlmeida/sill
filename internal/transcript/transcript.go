@@ -29,6 +29,7 @@ var (
 	notifyClose = []byte(`</tool-use-id>`)
 	// A tool_result for the launch: async launches acknowledge, sync ones carry the output.
 	resultMarker = []byte(`"type":"tool_result"`)
+	resultID     = []byte(`"tool_use_id":"`)
 	asyncAck     = []byte(`Async agent launched`)
 	// Every record Claude Code writes carries a timestamp at its top level.
 	timestampMarker = []byte(`"timestamp":"`)
@@ -123,11 +124,21 @@ func (s *scanner) record(line []byte) {
 			delete(s.open, id)
 		}
 	}
-	if bytes.Contains(line, resultMarker) {
-		for id := range s.open {
-			if syncResult(line, id) {
+	if len(s.open) > 0 && bytes.Contains(line, resultMarker) {
+		for rest := line; ; {
+			i := bytes.Index(rest, resultID)
+			if i < 0 {
+				break
+			}
+			rest = rest[i+len(resultID):]
+			end := bytes.IndexByte(rest, '"')
+			if end < 0 {
+				break
+			}
+			if id := string(rest[:end]); s.open[id] && syncResult(rest[end:]) {
 				delete(s.open, id)
 			}
+			rest = rest[end:]
 		}
 	}
 }
@@ -219,16 +230,12 @@ func between(line, open, close []byte) []string {
 	}
 }
 
-// syncResult reports whether line carries a real result for the tool use, meaning the agent
-// ran in the foreground and is done. An async launch only acknowledges and is still running.
-func syncResult(line []byte, id string) bool {
-	i := bytes.Index(line, []byte(`"tool_use_id":"`+id+`"`))
-	if i < 0 {
-		return false
+// syncResult reports whether the tool result that starts at after (just past its
+// tool_use_id) is a real one, meaning the agent ran in the foreground and is done. An async
+// launch only acknowledges and is still running.
+func syncResult(after []byte) bool {
+	if len(after) > 600 {
+		after = after[:600]
 	}
-	window := line[i:]
-	if len(window) > 600 {
-		window = window[:600]
-	}
-	return !bytes.Contains(window, asyncAck)
+	return !bytes.Contains(after, asyncAck)
 }
