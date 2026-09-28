@@ -3,10 +3,14 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/LucasAntunesdeAlmeida/sill/internal/payload"
+	"github.com/LucasAntunesdeAlmeida/sill/internal/render"
 )
 
 var ansi = regexp.MustCompile(`\x1b\[[0-9;]*m`)
@@ -53,6 +57,56 @@ func TestRenderUsesTranscriptCache(t *testing.T) {
 	}
 	if states, _ := filepath.Glob(filepath.Join(cache, "transcripts", "*.json")); len(states) != 1 {
 		t.Errorf("want one transcript state, got %v", states)
+	}
+}
+
+// A render that fails says so on the line and leaves the details for later.
+func TestRenderFailed(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	cache := t.TempDir()
+	t.Setenv("SILL_CACHE_DIR", cache)
+
+	var out bytes.Buffer
+	err := run(nil, strings.NewReader(`{"model": `), &out)
+	if err == nil {
+		t.Fatal("a broken payload should fail")
+	}
+	renderFailed(err, &out)
+	if got := out.String(); got != "sill: payload: unexpected end of JSON input\n" {
+		t.Errorf("line = %q", got)
+	}
+	details, readErr := os.ReadFile(filepath.Join(cache, lastErrorFile))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	for _, want := range []string{"time: ", "version: ", "error: payload: unexpected end of JSON input", "payload (10 bytes", `{"model": `} {
+		if !strings.Contains(string(details), want) {
+			t.Errorf("details missing %q:\n%s", want, details)
+		}
+	}
+}
+
+func TestRenderPanicIsRecovered(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	cache := t.TempDir()
+	t.Setenv("SILL_CACHE_DIR", cache)
+	old := renderLine
+	renderLine = func(*payload.Payload, render.State) string { panic("boom\x1b[2J") }
+	t.Cleanup(func() { renderLine = old })
+
+	var out bytes.Buffer
+	err := run(nil, strings.NewReader(`{}`), &out)
+	if err == nil || !strings.Contains(err.Error(), "internal error: boom") {
+		t.Fatalf("err = %v", err)
+	}
+	out.Reset()
+	renderFailed(err, &out)
+	if got := out.String(); got != "sill: internal error: boom?[2J\n" {
+		t.Errorf("line = %q", got)
+	}
+	details, _ := os.ReadFile(filepath.Join(cache, lastErrorFile))
+	if !strings.Contains(string(details), "stack:\n") || !strings.Contains(string(details), "renderStdin") {
+		t.Errorf("stack missing:\n%s", details)
 	}
 }
 

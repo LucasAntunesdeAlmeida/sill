@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LucasAntunesdeAlmeida/sill/internal/atomicfile"
 	"github.com/LucasAntunesdeAlmeida/sill/internal/config"
 	"github.com/LucasAntunesdeAlmeida/sill/internal/gitinfo"
 	"github.com/LucasAntunesdeAlmeida/sill/internal/install"
@@ -56,10 +58,18 @@ Inside Claude Code, run any of these without a model turn:
 var demoPayload []byte
 
 func main() {
-	if err := run(os.Args[1:], os.Stdin, os.Stdout); err != nil {
-		fmt.Fprintln(os.Stderr, "sill:", err)
-		os.Exit(1)
+	err := run(os.Args[1:], os.Stdin, os.Stdout)
+	if err == nil {
+		return
 	}
+	if len(os.Args) == 1 {
+		// A render. Claude Code does not show stderr and may drop the output of a failing
+		// command, so the failure is the line itself and the process succeeds.
+		renderFailed(err, os.Stdout)
+		return
+	}
+	fmt.Fprintln(os.Stderr, "sill:", err)
+	os.Exit(1)
 }
 
 func run(args []string, stdin io.Reader, stdout io.Writer) error {
@@ -91,7 +101,10 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 	return fmt.Errorf("unknown command %q\n\n%s", args[0], usage)
 }
 
-func renderStdin(stdin io.Reader, stdout io.Writer) error {
+// renderLine builds the line; tests replace it to exercise a panicking render.
+var renderLine = render.Render
+
+func renderStdin(stdin io.Reader, stdout io.Writer) (err error) {
 	if f, ok := stdin.(*os.File); ok {
 		if fi, err := f.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
 			_, err := io.WriteString(stdout, usage)
@@ -102,14 +115,63 @@ func renderStdin(stdin io.Reader, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = &renderError{err: fmt.Errorf("internal error: %v", r), stack: debug.Stack(), payload: data}
+		}
+	}()
 	p, err := payload.Parse(data)
 	if err != nil {
-		return fmt.Errorf("payload: %w", err)
+		return &renderError{err: fmt.Errorf("payload: %w", err), payload: data}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
-	_, err = io.WriteString(stdout, render.Render(p, gather(ctx, p)))
+	_, err = io.WriteString(stdout, renderLine(p, gather(ctx, p)))
 	return err
+}
+
+// renderError is a failed render with what it takes to report it.
+type renderError struct {
+	err     error
+	stack   []byte // set when the render panicked
+	payload []byte
+}
+
+func (e *renderError) Error() string { return e.err.Error() }
+func (e *renderError) Unwrap() error { return e.err }
+
+// lastErrorFile keeps the details of the most recent failed render.
+const lastErrorFile = "last-error.txt"
+
+// renderFailed puts a short message on the status line and the details, payload and stack
+// included, into the cache directory.
+func renderFailed(err error, stdout io.Writer) {
+	msg, _, _ := strings.Cut(err.Error(), "\n")
+	if len(msg) > 80 {
+		msg = msg[:77] + "..."
+	}
+	fmt.Fprintln(stdout, "sill: "+render.Clean(msg))
+
+	dir := cacheDir()
+	if dir == "" || os.MkdirAll(dir, 0o755) != nil {
+		return
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "time: %s\nversion: %s\nerror: %s\n", time.Now().Format(time.RFC3339), versionString(), err)
+	var re *renderError
+	if errors.As(err, &re) {
+		if len(re.payload) > 0 {
+			shown := re.payload
+			if len(shown) > 4096 {
+				shown = shown[:4096]
+			}
+			fmt.Fprintf(&b, "\npayload (%d bytes, review before sharing):\n%s\n", len(re.payload), shown)
+		}
+		if len(re.stack) > 0 {
+			fmt.Fprintf(&b, "\nstack:\n%s", re.stack)
+		}
+	}
+	_ = atomicfile.Write(filepath.Join(dir, lastErrorFile), []byte(b.String()), 0o644)
 }
 
 // budget is how long a render may spend on git and the transcript together. Past it, git
