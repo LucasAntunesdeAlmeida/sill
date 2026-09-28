@@ -19,15 +19,26 @@ sill install
 ```
 
 Or download a binary from the [releases page](https://github.com/LucasAntunesdeAlmeida/sill/releases),
-put it somewhere on your PATH, and run `sill install`.
+put it somewhere on your PATH, and run `sill install`. Each binary carries a build provenance
+attestation, so you can check it was built by this repository's release workflow:
+
+```
+gh attestation verify sill-linux-amd64 --repo LucasAntunesdeAlmeida/sill
+```
+
+The macOS binaries are not signed. If one was downloaded through a browser, macOS quarantines it;
+clear that with `xattr -d com.apple.quarantine sill-darwin-arm64`.
 
 `sill install` writes the `statusLine` entry into `~/.claude/settings.json` (backed up first to `settings.json.sill.bak`, other
 settings untouched) pointing at the binary where it is. Restart Claude Code. The binary needs to be on
 your PATH only so that `sill set` is easy to type; `go install` puts it in `$GOPATH/bin`, which usually is.
 It honors `CLAUDE_CONFIG_DIR` if you use one. `sill uninstall` removes the entry again.
 
-Requirements: `git` on PATH for the branch segment (everything else works without it). On Windows,
-Claude Code runs status line commands through Git Bash, so Git for Windows is needed anyway.
+Requirements: none for most repositories, since the branch is read from `.git/HEAD`. `git` on PATH
+is used for `dirty` and for the repositories whose HEAD file cannot answer (see How it works). On
+Windows, Claude Code runs status line commands through Git Bash, so Git for Windows is there anyway.
+
+If the line is blank, wrong or says `sill: ...`, run `sill doctor`.
 
 ## What it shows
 
@@ -43,7 +54,7 @@ the path and the model. Labels and separators are gray; only budgets change colo
 | `compactions` | on | `compact 1`, how many times the context was compacted | transcript |
 | `duration` | off | `up 2h15`, time since the session started | transcript |
 | `path` | on | `~/.../utils/sill`: home as `~`, anchor plus the last two folders | payload |
-| `git` | on | branch, or short sha when detached, then `MERGING`, `REBASING`, `CHERRY-PICKING`, `REVERTING` or `BISECTING` in red | one `git` call |
+| `git` | on | branch, or short sha when detached, then `MERGING`, `REBASING`, `CHERRY-PICKING`, `REVERTING` or `BISECTING` in red | `.git/HEAD` |
 | `dirty` | off | `*` after the branch when tracked files have uncommitted changes. Costs a second `git` call | `git status` |
 | `worktree` | on | `wt`, or `wt:name` when the worktree is not named like the branch | payload |
 | `pr` | on | `#42 +` approved, `#42 x` changes requested, `#42 draft`; `!42` for a GitLab MR | payload |
@@ -99,8 +110,9 @@ sill asks the console for its width (the Windows console API or `/dev/tty`, sinc
 Claude Code) and, when a line would overflow, gives up detail in a fixed order instead of wrapping:
 the path shrinks to `~/.../sill` and then to `sill`, limits lose their reset times, then segments drop
 one by one: `version`, `duration`, `session`, `compactions`, `agents`, `cache`, `effort`, `worktree`,
-`pr`, `git`, `path`. Budgets and the model go last. `sill settings` prints the detected width; if it
-says unknown, set `width` yourself.
+`pr`, `git`, `path`. Budgets and the model go last. Widths are counted in terminal columns, so a
+folder or session name in Chinese, Japanese or Korean, or with an emoji, counts double.
+`sill settings` prints the detected width; if it says unknown, set `width` yourself.
 
 ## Commands
 
@@ -110,7 +122,9 @@ sill install            point settings.json at this binary
 sill uninstall          remove the statusLine entry again
 sill settings           list every option with its current value and the detected width
 sill set <key> <value>  change options, several pairs at once
+sill unset <key>...     back to the default; `sill unset lines` drops custom lines
 sill demo               render a sample payload with the current settings
+sill doctor             check the setup and what a render sees
 ```
 
 ```
@@ -118,6 +132,24 @@ sill set layout full
 sill set cache on version off
 sill set reset both
 sill set width 120
+sill unset width
+```
+
+`sill doctor` prints one line per check: whether `settings.json` runs this binary, problems in
+`sill.json` (unknown keys, bad values, names in `lines` that are not segments), how the branch is
+read and how long it takes, the terminal width, the newest transcript with its scan times, and the
+last render that failed. It also compares the transcript markers sill relies on with a looser search,
+so if a Claude Code update changes the transcript format it says so rather than showing no agents:
+
+```
+ok    sill.json is valid, 1 option(s) changed
+ok    settings.json runs this binary
+ok    git: branch main read from .git/HEAD in 0.5 ms, no git process
+ok    terminal width 120 columns
+ok    latest transcript: 1804 records, 0 agent(s) running, 0 compaction(s)
+      C:/Users/me/.claude/projects/.../5f2c.jsonl (24.4 MB)
+      full scan 76.0 ms, a render with nothing new 1.5 ms
+ok    no failed render recorded
 ```
 
 Inside a Claude Code session, prefix the command with `!` to run it without a model turn:
@@ -132,14 +164,27 @@ only contains what you changed, so `sill settings` is the place to see everythin
 ## How it works
 
 Claude Code runs the command on every update and pipes a JSON payload on stdin. sill reads the fields
-above from it, makes one `git rev-parse` call for the branch and reads git's marker files for the
-operation in progress. It never runs `git status` unless you turn `dirty` on, so large repos stay fast.
+above from it. For the branch it walks up to the `.git` directory (or follows the `.git` file of a
+worktree or submodule), reads `HEAD` and git's marker files for the operation in progress: about half
+a millisecond, where starting git costs 20 ms or more on Windows. git itself runs only when those files
+cannot answer (`GIT_DIR` or `GIT_WORK_TREE` set, a reftable repository, an unusual HEAD), and
+`git status` only when you turn `dirty` on, so large repos stay fast.
 
 Agents, compactions and the session start come from the session transcript, whose path is in the
-payload. sill scans it once per render looking for byte markers and never decodes a record: the
-compaction boundary, `Agent` tool calls, the task notification that names a finished agent, and the
-first record's timestamp. A 17 MB transcript adds about 30 ms. With `agents` and `compactions` off,
-only the head of the file is read for the start time.
+payload. sill looks for byte markers and never decodes a record: the compaction boundary, `Agent` tool
+calls, the task notification that names a finished agent, and the first record's timestamp. The scan
+is incremental: where it stopped and what it counted are kept per session in the user cache directory
+(`~/.cache/sill`, `~/Library/Caches/sill` or `%LocalAppData%\sill`, or `SILL_CACHE_DIR`), so a render
+reads only what was appended since the last one, about 1 ms against 45 ms for a full pass over a 25 MB
+transcript. A transcript that shrank or was rewritten is scanned again from the start, and the state
+of sessions untouched for 30 days is removed. With `agents` and `compactions` off, only the head of
+the file is read for the start time.
+
+A render gets one second in total for git and the transcript. Past it, git is not waited for and the
+scan continues on the next render. Text from the payload (session, folder, model names) has control
+characters replaced with `?`, so a name cannot clear the screen or split the line. If a render fails,
+the line says `sill: <error>` and the details (the error, the payload, a stack for a crash) go to
+`last-error.txt` in the cache directory, which `sill doctor` reports.
 
 The full payload schema is embedded in the Claude Code binary; search it for
 `Pre-calculated: % of context used`.
@@ -150,12 +195,15 @@ The full payload schema is embedded in the Claude Code binary; search it for
 go test ./...
 gofmt -l . && go vet ./...
 go build ./cmd/sill && ./sill demo
+make bench              # render, ReadHead and transcript scan benchmarks
+make fuzz               # each fuzz target for FUZZTIME (30s)
 ```
 
 Standard library only. Layout is `cmd/sill` for the CLI and `internal/` for one package per concern:
-`payload`, `config`, `render`, `gitinfo`, `transcript`, `term`, `install`. CI tests on Linux, macOS and
-Windows with the latest Go and with the minimum in `go.mod`. Tags `v*` build release binaries for six
-targets through GitHub Actions.
+`payload`, `config`, `render`, `gitinfo`, `transcript`, `term`, `install`, `atomicfile`. CI tests on
+Linux, macOS and Windows with the latest Go and with the minimum in `go.mod`, runs `govulncheck` and a
+short fuzzing pass. Actions are pinned to commit SHAs and kept current by Dependabot. Tags `v*` build
+release binaries for six targets with `-trimpath`, with checksums and provenance attestations.
 
 ## License
 
