@@ -1,15 +1,17 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS  = -s -w -X main.version=$(VERSION)
+# -trimpath keeps the build machine's paths out of the binary, so a build is reproducible.
+FLAGS    = -trimpath -ldflags "$(LDFLAGS)"
 
 FUZZTIME ?= 30s
 
 .PHONY: build install test lint bench fuzz dist clean
 
 build:
-	go build -ldflags "$(LDFLAGS)" ./cmd/sill
+	go build $(FLAGS) ./cmd/sill
 
 install:
-	go install -ldflags "$(LDFLAGS)" ./cmd/sill
+	go install $(FLAGS) ./cmd/sill
 
 test:
 	go test ./...
@@ -33,7 +35,7 @@ dist:
 	@for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do \
 		os=$${target%/*}; arch=$${target#*/}; ext=""; [ "$$os" = windows ] && ext=.exe; \
 		echo "building $$target"; \
-		GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o dist/sill-$$os-$$arch$$ext ./cmd/sill; \
+		GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 go build $(FLAGS) -o dist/sill-$$os-$$arch$$ext ./cmd/sill; \
 	done
 
 clean:
