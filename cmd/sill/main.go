@@ -3,10 +3,12 @@
 package main
 
 import (
+	"context"
 	_ "embed"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -104,12 +106,40 @@ func renderStdin(stdin io.Reader, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("payload: %w", err)
 	}
-	_, err = io.WriteString(stdout, render.Render(p, gather(p)))
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	defer cancel()
+	_, err = io.WriteString(stdout, render.Render(p, gather(ctx, p)))
 	return err
 }
 
+// budget is how long a render may spend on git and the transcript together. Past it, git
+// is not waited for and the transcript scan resumes on the next render, so a hung network
+// drive or a huge first scan costs one slow line instead of a frozen one.
+const budget = time.Second
+
+// cacheDir holds sill's own state: $SILL_CACHE_DIR, or sill in the user cache directory
+// (~/.cache/sill, ~/Library/Caches/sill, %LocalAppData%\sill). Empty when there is none.
+func cacheDir() string {
+	if d := os.Getenv("SILL_CACHE_DIR"); d != "" {
+		return d
+	}
+	d, err := os.UserCacheDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(d, "sill")
+}
+
+// transcriptCache is where the incremental transcript scans keep their state.
+func transcriptCache() string {
+	if d := cacheDir(); d != "" {
+		return filepath.Join(d, "transcripts")
+	}
+	return ""
+}
+
 // gather loads settings and collects only what the enabled segments need.
-func gather(p *payload.Payload) render.State {
+func gather(ctx context.Context, p *payload.Payload) render.State {
 	s, err := config.Load()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "sill:", err) // keep rendering with defaults
@@ -123,11 +153,11 @@ func gather(p *payload.Payload) render.State {
 		Color:    colorEnabled(s),
 	}
 	if s.On("git") || s.On("worktree") {
-		st.Git = gitinfo.Lookup(p.CurrentDir(), s.On("dirty"))
+		st.Git = gitinfo.Lookup(ctx, p.CurrentDir(), s.On("dirty"))
 	}
 	switch {
 	case s.On("agents") || s.On("compactions"):
-		st.Activity = transcript.Scan(p.TranscriptPath)
+		st.Activity = transcript.ScanCached(ctx, p.TranscriptPath, transcriptCache())
 	case s.On("duration"):
 		st.Activity.Start = transcript.Start(p.TranscriptPath)
 	}

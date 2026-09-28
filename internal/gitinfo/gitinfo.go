@@ -20,7 +20,8 @@ type State struct {
 	Dirty  bool
 }
 
-// Timeout bounds each git call so a hung filesystem cannot stall the status line.
+// Timeout bounds each git call so a hung filesystem cannot stall the status line. The
+// caller's context usually ends sooner: it is the budget of the whole render.
 const Timeout = 3 * time.Second
 
 // Lookup finds the repository around cwd and reports its state. Reading HEAD answers in
@@ -30,16 +31,16 @@ const Timeout = 3 * time.Second
 //
 // With dirty set, git status runs as well, without touching untracked files or the index
 // lock. Without it no git status is run, so large repos stay fast.
-func Lookup(cwd string, dirty bool) State {
+func Lookup(ctx context.Context, cwd string, dirty bool) State {
 	if cwd == "" {
 		return State{}
 	}
 	st, ok := ReadHead(cwd)
 	if !ok {
-		st = lookupGit(cwd)
+		st = lookupGit(ctx, cwd)
 	}
 	if dirty && st.Branch != "" {
-		st.Dirty = isDirty(cwd)
+		st.Dirty = isDirty(ctx, cwd)
 	}
 	return st
 }
@@ -122,11 +123,11 @@ func isHash(s string) bool {
 // name ("HEAD" when detached); --abbrev-ref sticks for later args and --short cannot be
 // combined, hence the order. Outside a repo it prints nothing; on an unborn branch it
 // prints the git dir then fails, and a second call gets the branch name.
-func lookupGit(cwd string) State {
+func lookupGit(ctx context.Context, cwd string) State {
 	if _, err := exec.LookPath("git"); err != nil {
 		return State{}
 	}
-	out, err := run(cwd, "rev-parse", "--git-dir", "HEAD", "--abbrev-ref", "HEAD")
+	out, err := run(ctx, cwd, "rev-parse", "--git-dir", "HEAD", "--abbrev-ref", "HEAD")
 	lines := splitLines(out)
 	if len(lines) == 0 || lines[0] == "" {
 		return State{}
@@ -143,7 +144,7 @@ func lookupGit(cwd string) State {
 			branch = lines[1][:7]
 		}
 	} else {
-		out, _ := run(cwd, "symbolic-ref", "--short", "HEAD")
+		out, _ := run(ctx, cwd, "symbolic-ref", "--short", "HEAD")
 		branch = strings.TrimSpace(out)
 	}
 	return State{Branch: branch, Status: DirStatus(gitDir)}
@@ -173,13 +174,13 @@ func DirStatus(gitDir string) string {
 
 // isDirty reports tracked changes, staged or not. Untracked files are ignored, and
 // --no-optional-locks keeps a background render from writing the index.
-func isDirty(cwd string) bool {
-	out, err := run(cwd, "--no-optional-locks", "status", "--porcelain", "--untracked-files=no")
+func isDirty(ctx context.Context, cwd string) bool {
+	out, err := run(ctx, cwd, "--no-optional-locks", "status", "--porcelain", "--untracked-files=no")
 	return err == nil && strings.TrimSpace(out) != ""
 }
 
-func run(cwd string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+func run(ctx context.Context, cwd string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, Timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", cwd}, args...)...)
 	hideWindow(cmd)

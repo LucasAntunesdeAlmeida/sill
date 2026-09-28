@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -25,6 +27,32 @@ func TestRenderFromStdin(t *testing.T) {
 	}
 	if err := run(nil, strings.NewReader("{"), &out); err == nil {
 		t.Error("broken payload should be reported")
+	}
+}
+
+// The transcript segments go through the incremental scan, whose state lands in
+// SILL_CACHE_DIR.
+func TestRenderUsesTranscriptCache(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	t.Setenv("NO_COLOR", "1")
+	cache := t.TempDir()
+	t.Setenv("SILL_CACHE_DIR", cache)
+	transcriptPath, err := filepath.Abs(filepath.Join("..", "..", "internal", "transcript", "testdata", "session.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, _ := json.Marshal(map[string]any{"model": map[string]string{"id": "m"}, "transcript_path": transcriptPath})
+	for range 2 {
+		var out bytes.Buffer
+		if err := run(nil, bytes.NewReader(doc), &out); err != nil {
+			t.Fatal(err)
+		}
+		if got := out.String(); got != "agents 2  compact 2 | m" {
+			t.Errorf("got %q", got)
+		}
+	}
+	if states, _ := filepath.Glob(filepath.Join(cache, "transcripts", "*.json")); len(states) != 1 {
+		t.Errorf("want one transcript state, got %v", states)
 	}
 }
 

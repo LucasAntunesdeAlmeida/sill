@@ -1,6 +1,7 @@
 package gitinfo
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,11 +47,11 @@ func TestLookup(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
-	if got := Lookup("", false); got != (State{}) {
+	if got := Lookup(context.Background(), "", false); got != (State{}) {
 		t.Errorf("empty cwd = %+v", got)
 	}
 	plain := t.TempDir()
-	if got := Lookup(plain, true); got != (State{}) {
+	if got := Lookup(context.Background(), plain, true); got != (State{}) {
 		t.Errorf("outside a repo = %+v", got)
 	}
 
@@ -64,7 +65,7 @@ func TestLookup(t *testing.T) {
 		}
 	}
 	git("init", "-q", "-b", "main")
-	if got := Lookup(repo, false); got.Branch != "main" || got.Status != "" {
+	if got := Lookup(context.Background(), repo, false); got.Branch != "main" || got.Status != "" {
 		t.Errorf("unborn branch = %+v", got)
 	}
 	// Reading HEAD must agree with asking git, wherever in the tree we are.
@@ -74,7 +75,7 @@ func TestLookup(t *testing.T) {
 		if !ok {
 			t.Errorf("%s: ReadHead fell back to git", what)
 		}
-		if slow := lookupGit(dir); fast != slow {
+		if slow := lookupGit(context.Background(), dir); fast != slow {
 			t.Errorf("%s: ReadHead %+v, git %+v", what, fast, slow)
 		}
 	}
@@ -89,7 +90,7 @@ func TestLookup(t *testing.T) {
 	}
 	git("add", "a.txt")
 	git("commit", "-q", "-m", "one")
-	if got := Lookup(repo, true); got.Branch != "main" || got.Dirty {
+	if got := Lookup(context.Background(), repo, true); got.Branch != "main" || got.Dirty {
 		t.Errorf("clean checkout = %+v", got)
 	}
 	sameAsGit("branch", repo)
@@ -100,7 +101,7 @@ func TestLookup(t *testing.T) {
 	wt := filepath.Join(t.TempDir(), "wt")
 	git("worktree", "add", "-q", "-b", "spike", wt)
 	sameAsGit("linked worktree", wt)
-	if got := Lookup(wt, false); got.Branch != "spike" {
+	if got := Lookup(context.Background(), wt, false); got.Branch != "spike" {
 		t.Errorf("worktree = %+v", got)
 	}
 	git("checkout", "-q", "main")
@@ -109,31 +110,42 @@ func TestLookup(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "new.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := Lookup(repo, true); got.Dirty {
+	if got := Lookup(context.Background(), repo, true); got.Dirty {
 		t.Errorf("untracked file counted as dirty: %+v", got)
 	}
 	if err := os.WriteFile(file, []byte("two\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := Lookup(repo, true); !got.Dirty {
+	if got := Lookup(context.Background(), repo, true); !got.Dirty {
 		t.Errorf("modified file not dirty: %+v", got)
 	}
-	if got := Lookup(repo, false); got.Dirty {
+	if got := Lookup(context.Background(), repo, false); got.Dirty {
 		t.Errorf("dirty computed without being asked: %+v", got)
 	}
 
 	git("checkout", "-q", "--detach")
-	if got := Lookup(repo, false); len(got.Branch) != 7 || got.Branch == "HEAD" {
+	if got := Lookup(context.Background(), repo, false); len(got.Branch) != 7 || got.Branch == "HEAD" {
 		t.Errorf("detached = %+v", got)
 	}
 	sameAsGit("detached", repo)
 	if err := os.WriteFile(filepath.Join(repo, ".git", "MERGE_HEAD"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := Lookup(repo, false); got.Status != "MERGING" {
+	if got := Lookup(context.Background(), repo, false); got.Status != "MERGING" {
 		t.Errorf("merging = %+v", got)
 	}
 	sameAsGit("merging", repo)
+
+	// With the render's budget spent, git is not waited for; the HEAD file still answers.
+	done, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got := Lookup(done, repo, true); got.Branch == "" || got.Dirty {
+		t.Errorf("expired budget, HEAD readable = %+v", got)
+	}
+	t.Setenv("GIT_DIR", filepath.Join(repo, ".git"))
+	if got := Lookup(done, repo, false); got != (State{}) {
+		t.Errorf("expired budget, git needed = %+v", got)
+	}
 }
 
 // ReadHead on hand-made repositories, no git needed.
