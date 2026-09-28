@@ -26,6 +26,27 @@ jobs:
       - run: go test ./...
       - run: go build ./cmd/sill
 
+  # No dependencies does not mean no vulnerabilities: this checks the standard library
+  # functions sill actually calls against the Go vulnerability database.
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+
+  # A short run of every fuzz target; `make fuzz` runs them longer locally.
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+      - run: make fuzz FUZZTIME=20s
+
   # The go.mod directive is the oldest Go users can build with; make sure it stays true.
   minimum-go:
     runs-on: ubuntu-latest
