@@ -83,6 +83,21 @@ func TestPresetsNameRealSegments(t *testing.T) {
 	}
 }
 
+func TestUnset(t *testing.T) {
+	s := New()
+	_ = s.Set("cache", "on")
+	s.Lines = []string{"path"}
+	if err := s.Unset("cache"); err != nil || s.On("cache") || !s.IsDefault("cache") {
+		t.Errorf("unset cache: err=%v on=%v", err, s.On("cache"))
+	}
+	if err := s.Unset("lines"); err != nil || s.Lines != nil {
+		t.Errorf("unset lines: err=%v lines=%v", err, s.Lines)
+	}
+	if err := s.Unset("bogus"); err == nil {
+		t.Error("unknown option accepted")
+	}
+}
+
 func TestParseSaveLoad(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", dir)

@@ -159,6 +159,19 @@ func (s Settings) Set(name, value string) error {
 	return nil
 }
 
+// Unset returns an option to its default, or with "lines" drops the custom lines.
+func (s *Settings) Unset(name string) error {
+	if name == "lines" {
+		s.Lines = nil
+		return nil
+	}
+	if Find(name) == nil {
+		return fmt.Errorf("unknown option %q (run `sill settings` for the list)", name)
+	}
+	delete(s.values, name)
+	return nil
+}
+
 // Layout resolves the active layout. A custom layout without lines falls back to compact.
 func (s Settings) Layout() Layout {
 	name := s.Get("layout")

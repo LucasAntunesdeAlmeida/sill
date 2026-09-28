@@ -47,6 +47,7 @@ Usage:
   sill uninstall          remove the statusLine entry again
   sill settings           list options and current values
   sill set <key> <value>  change options, e.g. sill set layout full cache on
+  sill unset <key>...     back to the default, e.g. sill unset cache width
   sill demo               render a sample payload with the current settings
   sill version            print the version
 
@@ -89,6 +90,8 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return settings(stdout)
 	case "set":
 		return set(args[1:], stdout)
+	case "unset":
+		return unset(args[1:], stdout)
 	case "demo":
 		return demo(stdout)
 	case "version", "-v", "--version":
@@ -276,6 +279,33 @@ func set(args []string, stdout io.Writer) error {
 	}
 	if s.Get("layout") == "custom" && len(s.Lines) == 0 {
 		fmt.Fprintf(stdout, "layout is custom but %s has no \"lines\", showing compact until it does\n", config.Path())
+	}
+	return nil
+}
+
+// unset returns options to their defaults, and "lines" drops a custom layout's lines.
+func unset(args []string, stdout io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("unset takes option names, e.g. sill unset cache width")
+	}
+	s, err := config.Load()
+	if err != nil {
+		return err
+	}
+	for _, name := range args {
+		if err := s.Unset(name); err != nil {
+			return err
+		}
+	}
+	if err := s.Save(); err != nil {
+		return err
+	}
+	for _, name := range args {
+		if name == "lines" {
+			fmt.Fprintln(stdout, "lines removed")
+			continue
+		}
+		fmt.Fprintf(stdout, "%s = %s (default)\n", name, s.Get(name))
 	}
 	return nil
 }

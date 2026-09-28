@@ -181,6 +181,30 @@ func TestSetAndSettings(t *testing.T) {
 	}
 }
 
+func TestUnset(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	var out bytes.Buffer
+	if err := run([]string{"set", "cache", "on", "width", "90"}, nil, &out); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := run([]string{"unset", "cache", "width", "lines"}, nil, &out); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); got != "cache = off (default)\nwidth = 0 (default)\nlines removed\n" {
+		t.Errorf("unset output %q", got)
+	}
+	out.Reset()
+	if err := run([]string{"settings"}, nil, &out); err != nil || strings.Contains(out.String(), "*  ") {
+		t.Errorf("nothing should be marked changed: err=%v\n%s", err, out.String())
+	}
+	for _, bad := range [][]string{{"unset"}, {"unset", "bogus"}} {
+		if err := run(bad, nil, &out); err == nil {
+			t.Errorf("%v accepted", bad)
+		}
+	}
+}
+
 func TestDemo(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	t.Setenv("NO_COLOR", "")
