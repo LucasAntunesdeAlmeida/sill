@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 const existing = `{
@@ -109,7 +110,7 @@ func TestRemoveStatusLine(t *testing.T) {
 	if strings.Index(string(out), `"model"`) > strings.Index(string(out), `"hooks"`) {
 		t.Error("key order changed")
 	}
-	for _, cmd := range []string{`"/usr/local/bin/sill"`, `sill`, `"C:/x/sill.exe"`} {
+	for _, cmd := range []string{`"/usr/local/bin/sill"`, `sill`, `"C:/x/sill.exe"`, `"C:/x/sill-windows-amd64.exe"`, `"/opt/sill-linux-arm64"`, `C:\x\SILL.EXE`} {
 		doc := `{"statusLine": {"type": "command", "command": ` + mustJSON(cmd) + `}}`
 		if _, changed, _ := RemoveStatusLine([]byte(doc)); !changed {
 			t.Errorf("%s not recognised as sill", cmd)
@@ -118,6 +119,144 @@ func TestRemoveStatusLine(t *testing.T) {
 	if _, changed, _ := RemoveStatusLine([]byte(`{"statusLine": {"type": "command", "command": "sillier"}}`)); changed {
 		t.Error("a command merely containing sill was removed")
 	}
+}
+
+func TestIsSill(t *testing.T) {
+	cases := map[string]bool{
+		`"C:/Users/me/go/bin/sill.exe"`:       true,
+		`"C:\Users\me\go\bin\SILL.EXE"`:       true,
+		`"/opt/my tools/sill" --debug`:        true,
+		`sill`:                                true,
+		`sill-darwin-arm64`:                   true,
+		`"/usr/local/bin/sill_v1"`:            true,
+		`sillier`:                             false,
+		`"/usr/local/bin/not-sill"`:           false,
+		`"/usr/local/bin/sill.exe.bak"`:       false,
+		`powershell -File C:/x/sill.ps1`:      false,
+		`bash -c "sill"`:                      false,
+		`"C:/Program Files/sill/other.exe"`:   false,
+		`/home/me/.claude/statusline-sill.sh`: false,
+		``:                                    false,
+	}
+	for cmd, want := range cases {
+		if got := IsSill(cmd); got != want {
+			t.Errorf("IsSill(%q) = %v, want %v", cmd, got, want)
+		}
+	}
+}
+
+func TestIsTempBuild(t *testing.T) {
+	cases := map[string]bool{
+		`C:\Users\me\AppData\Local\Temp\go-build484002928\b001\exe\sill.exe`: true,
+		"/tmp/go-build123/b001/exe/sill":                                     true,
+		"/home/me/go/bin/sill":                                               false,
+		`C:\Users\me\go\bin\sill.exe`:                                        false,
+		"/home/me/src/go-builder/sill":                                       false,
+		"/home/me/go-build/sill":                                             false,
+	}
+	for exe, want := range cases {
+		if got := IsTempBuild(exe); got != want {
+			t.Errorf("IsTempBuild(%q) = %v, want %v", exe, got, want)
+		}
+	}
+	if err := Run(t.TempDir(), "/tmp/go-build1/b001/exe/sill", &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "go install") {
+		t.Errorf("a go run build should be refused, got %v", err)
+	}
+}
+
+func TestParseEntriesIsStrict(t *testing.T) {
+	for _, doc := range []string{`{"a": 1`, `{"a": 1}{"b": 2}`, `{"a": 1} x`} {
+		if _, err := parseEntries([]byte(doc)); err == nil {
+			t.Errorf("%q accepted; rewriting it would drop or invent content", doc)
+		}
+	}
+	if entries, err := parseEntries([]byte("{\"a\": 1}\n\n")); err != nil || len(entries) != 1 {
+		t.Errorf("trailing whitespace: %v, %v", entries, err)
+	}
+}
+
+// FuzzSetStatusLine checks the promise install makes about the user's settings.json: every
+// other key survives with the same value and in the same order, the entry is idempotent,
+// and uninstall takes out exactly what install put in.
+func FuzzSetStatusLine(f *testing.F) {
+	f.Add([]byte(existing), `"C:/Users/me/go/bin/sill.exe"`)
+	f.Add([]byte(`{}`), `"/usr/local/bin/sill"`)
+	f.Add([]byte(`{"a": [1, {"b": null}], "statusLine": 3, "z": "\u2028<&>"}`), `sill`)
+	f.Add([]byte(``), `"/opt/sill-linux-amd64"`)
+	f.Fuzz(func(t *testing.T, raw []byte, command string) {
+		if !utf8.ValidString(command) {
+			return // JSON cannot carry it; sill only ever passes a path
+		}
+		out, _, err := SetStatusLine(raw, command)
+		if err != nil {
+			return
+		}
+		before, err := parseEntries(raw)
+		if err != nil {
+			t.Fatalf("SetStatusLine accepted a document parseEntries rejects: %v", err)
+		}
+		after, err := parseEntries(out)
+		if err != nil {
+			t.Fatalf("output does not parse: %v\n%s", err, out)
+		}
+		others := func(entries []entry) []entry {
+			var kept []entry
+			for _, e := range entries {
+				if e.key != "statusLine" {
+					kept = append(kept, e)
+				}
+			}
+			return kept
+		}
+		b, a := others(before), others(after)
+		if len(a) != len(b) {
+			t.Fatalf("other keys: %d before, %d after", len(b), len(a))
+		}
+		for i := range b {
+			if a[i].key != b[i].key || !sameJSON(t, a[i].val, b[i].val) {
+				t.Fatalf("key %q changed: %s -> %s", b[i].key, b[i].val, a[i].val)
+			}
+		}
+		if got, err := statusCommand(out); err != nil || got != command {
+			t.Fatalf("command = %q, want %q (%v)", got, command, err)
+		}
+		if again, changed, err := SetStatusLine(out, command); err != nil || changed || !bytes.Equal(again, out) {
+			t.Fatalf("second install changed=%v err=%v", changed, err)
+		}
+		if IsSill(command) {
+			removed, changed, err := RemoveStatusLine(out)
+			if err != nil || !changed {
+				t.Fatalf("uninstall changed=%v err=%v", changed, err)
+			}
+			left, _ := parseEntries(removed)
+			if len(others(left)) != len(b) {
+				t.Fatalf("uninstall left %d other keys, want %d", len(others(left)), len(b))
+			}
+		}
+	})
+}
+
+// statusCommand reads the statusLine command out of a document in memory.
+func statusCommand(raw []byte) (string, error) {
+	entries, err := parseEntries(raw)
+	if err != nil {
+		return "", err
+	}
+	_, current := findStatusLine(entries)
+	var cmd string
+	err = json.Unmarshal(current["command"], &cmd)
+	return cmd, err
+}
+
+func sameJSON(t *testing.T, a, b json.RawMessage) bool {
+	t.Helper()
+	var x, y any
+	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil {
+		return false
+	}
+	xs, _ := json.Marshal(x)
+	ys, _ := json.Marshal(y)
+	return bytes.Equal(xs, ys)
 }
 
 func mustJSON(s string) string {

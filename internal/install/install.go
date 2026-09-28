@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -22,6 +23,10 @@ import (
 func Run(dir, exe string, out io.Writer) error {
 	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
 		exe = resolved
+	}
+	if IsTempBuild(exe) {
+		return fmt.Errorf("%s is a temporary `go run` build that is deleted when it exits;\n"+
+			"run `go install ./cmd/sill` (or build a binary) and then `sill install`", exe)
 	}
 	// Claude Code runs the command through Git Bash on Windows and sh elsewhere; both
 	// want forward slashes and a quoted path.
@@ -68,6 +73,38 @@ func Uninstall(dir string, out io.Writer) error {
 // BackupName is the copy of settings.json taken before a change. One file, overwritten
 // each time, so repeated installs do not litter the config directory.
 const BackupName = "settings.json.sill.bak"
+
+// IsTempBuild reports whether exe lives in a folder `go run` creates and removes, such as
+// $TMPDIR/go-build1234/b001/exe/sill.
+func IsTempBuild(exe string) bool {
+	for part := range strings.SplitSeq(strings.ReplaceAll(exe, `\`, "/"), "/") {
+		digits, ok := strings.CutPrefix(part, "go-build")
+		if ok && digits != "" && strings.Trim(digits, "0123456789") == "" {
+			return true
+		}
+	}
+	return false
+}
+
+// CommandPath is the program a statusLine command runs: the quoted path sill install
+// writes, or the first word of a command written by hand.
+func CommandPath(cmd string) string {
+	cmd = strings.TrimSpace(cmd)
+	if rest, ok := strings.CutPrefix(cmd, `"`); ok {
+		path, _, _ := strings.Cut(rest, `"`)
+		return path
+	}
+	path, _, _ := strings.Cut(cmd, " ")
+	return path
+}
+
+// IsSill reports whether a statusLine command runs sill, under its own name or a release
+// asset's (sill-windows-amd64.exe) or one ending in a version.
+func IsSill(cmd string) bool {
+	name := strings.ToLower(path.Base(strings.ReplaceAll(CommandPath(cmd), `\`, "/")))
+	name = strings.TrimSuffix(name, ".exe")
+	return name == "sill" || strings.HasPrefix(name, "sill-") || strings.HasPrefix(name, "sill_")
+}
 
 // edit reads settings.json, applies fn, and writes the result after saving the previous
 // content to BackupName when fn reports a change. A missing file is treated as empty. The
@@ -123,6 +160,14 @@ func parseEntries(raw []byte) ([]entry, error) {
 			return nil, err
 		}
 		entries = append(entries, entry{key, val})
+	}
+	// The closing brace, then nothing: a truncated file or one with trailing data is not
+	// rewritten as if it were whole.
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('}') {
+		return nil, errors.New("unterminated JSON object")
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, errors.New("unexpected data after the JSON object")
 	}
 	return entries, nil
 }
@@ -202,8 +247,7 @@ func RemoveStatusLine(raw []byte) ([]byte, bool, error) {
 	}
 	var cmd string
 	_ = json.Unmarshal(current["command"], &cmd)
-	base := filepath.Base(strings.Trim(strings.TrimSpace(cmd), `"`))
-	if base != "sill" && base != "sill.exe" {
+	if !IsSill(cmd) {
 		return raw, false, nil
 	}
 	entries = append(entries[:idx], entries[idx+1:]...)
