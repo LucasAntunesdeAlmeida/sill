@@ -1,5 +1,6 @@
-// Package gitinfo reports the branch and any in-progress operation of a repository with a
-// single git call per render, plus an optional second call for uncommitted changes.
+// Package gitinfo reports the branch and any in-progress operation of a repository. The
+// branch is read from the repository's HEAD file; git itself runs only when that file
+// cannot answer, and for the optional check for uncommitted changes.
 package gitinfo
 
 import (
@@ -22,17 +23,106 @@ type State struct {
 // Timeout bounds each git call so a hung filesystem cannot stall the status line.
 const Timeout = 3 * time.Second
 
-// Lookup spawns git once. One rev-parse returns the git dir, the full sha and the branch
-// name ("HEAD" when detached); --abbrev-ref sticks for later args and --short cannot be
-// combined, hence the order. Outside a repo it prints nothing; on an unborn branch it
-// prints the git dir then fails, and a second call gets the branch name.
+// Lookup finds the repository around cwd and reports its state. Reading HEAD answers in
+// well under a millisecond where starting git costs tens of them (most on Windows), so git
+// only runs when the files cannot answer: GIT_DIR or GIT_WORK_TREE set, a reftable
+// repository, or a HEAD sill does not recognise.
 //
-// With dirty set, a second call runs git status without touching untracked files or the
-// index lock. Without it no git status is run, so large repos stay fast.
+// With dirty set, git status runs as well, without touching untracked files or the index
+// lock. Without it no git status is run, so large repos stay fast.
 func Lookup(cwd string, dirty bool) State {
 	if cwd == "" {
 		return State{}
 	}
+	st, ok := ReadHead(cwd)
+	if !ok {
+		st = lookupGit(cwd)
+	}
+	if dirty && st.Branch != "" {
+		st.Dirty = isDirty(cwd)
+	}
+	return st
+}
+
+// ReadHead answers from the repository files alone. ok is false when git has to be asked;
+// a folder that is in no repository is a definite answer, an empty State with ok true.
+func ReadHead(cwd string) (State, bool) {
+	if os.Getenv("GIT_DIR") != "" || os.Getenv("GIT_WORK_TREE") != "" {
+		return State{}, false
+	}
+	gitDir, found, ok := findGitDir(cwd)
+	if !ok {
+		return State{}, false
+	}
+	if !found {
+		return State{}, true
+	}
+	data, err := os.ReadFile(filepath.Join(gitDir, "HEAD"))
+	if err != nil {
+		return State{}, false
+	}
+	head := strings.TrimSpace(string(data))
+	var branch string
+	if ref, isRef := strings.CutPrefix(head, "ref: "); isRef {
+		name, isBranch := strings.CutPrefix(ref, "refs/heads/")
+		// A reftable repository keeps a placeholder here and the real HEAD elsewhere.
+		if !isBranch || name == "" || name == ".invalid" {
+			return State{}, false
+		}
+		branch = name
+	} else if isHash(head) {
+		branch = head[:7]
+	} else {
+		return State{}, false
+	}
+	return State{Branch: branch, Status: DirStatus(gitDir)}, true
+}
+
+// findGitDir walks up from cwd to the first .git entry: a directory, or in a linked
+// worktree or submodule a file naming the directory. found is false when there is none up
+// to the root; ok is false when a .git entry exists but cannot be read.
+func findGitDir(cwd string) (dir string, found, ok bool) {
+	for d := filepath.Clean(cwd); ; {
+		dotGit := filepath.Join(d, ".git")
+		fi, err := os.Stat(dotGit)
+		if err == nil {
+			if fi.IsDir() {
+				return dotGit, true, true
+			}
+			data, err := os.ReadFile(dotGit)
+			if err != nil {
+				return "", true, false
+			}
+			target, isLink := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir: ")
+			if !isLink || target == "" {
+				return "", true, false
+			}
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(d, target)
+			}
+			return target, true, true
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return "", false, true
+		}
+		d = parent
+	}
+}
+
+// isHash reports a full SHA-1 or SHA-256 object name.
+func isHash(s string) bool {
+	if len(s) != 40 && len(s) != 64 {
+		return false
+	}
+	return strings.Trim(s, "0123456789abcdef") == ""
+}
+
+// lookupGit spawns git once. One rev-parse returns the git dir, the full sha and the branch
+// name ("HEAD" when detached); --abbrev-ref sticks for later args and --short cannot be
+// combined, hence the order. Outside a repo it prints nothing; on an unborn branch it
+// prints the git dir then fails, and a second call gets the branch name.
+func lookupGit(cwd string) State {
 	if _, err := exec.LookPath("git"); err != nil {
 		return State{}
 	}
@@ -56,11 +146,7 @@ func Lookup(cwd string, dirty bool) State {
 		out, _ := run(cwd, "symbolic-ref", "--short", "HEAD")
 		branch = strings.TrimSpace(out)
 	}
-	st := State{Branch: branch, Status: DirStatus(gitDir)}
-	if dirty {
-		st.Dirty = isDirty(cwd)
-	}
-	return st
+	return State{Branch: branch, Status: DirStatus(gitDir)}
 }
 
 // DirStatus reads the marker files git leaves in its directory while an operation is in
