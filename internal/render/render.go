@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/LucasAntunesdeAlmeida/sill/internal/config"
@@ -249,13 +250,13 @@ func (r *renderer) segment(name string) string {
 		if !r.st.Layout.Wide {
 			level++
 		}
-		return DisplayPath(cwd, r.st.Home, level)
+		return Clean(DisplayPath(cwd, r.st.Home, level))
 	case "git":
 		g := r.st.Git
 		if g.Branch == "" {
 			return ""
 		}
-		s := g.Branch
+		s := Clean(g.Branch)
 		if g.Dirty && r.st.Settings.On("dirty") {
 			s += "*"
 		}
@@ -271,7 +272,7 @@ func (r *renderer) segment(name string) string {
 		if wt == r.st.Git.Branch {
 			return r.dim("wt")
 		}
-		return r.dim("wt:" + wt)
+		return r.dim("wt:" + Clean(wt))
 	case "pr":
 		if p.PR.Number == 0 {
 			return ""
@@ -290,17 +291,31 @@ func (r *renderer) segment(name string) string {
 		}
 		return s
 	case "model":
-		return p.ModelName()
+		return Clean(p.ModelName())
 	case "effort":
-		return p.Effort.Level
+		return Clean(p.Effort.Level)
 	case "session":
-		return p.SessionName
+		return Clean(p.SessionName)
 	case "version":
 		if p.Version != "" {
-			return r.dim("v" + p.Version)
+			return r.dim("v" + Clean(p.Version))
 		}
 	}
 	return ""
+}
+
+// Clean makes text from outside sill safe to print. Control characters could clear the
+// screen, retitle the window or split the line, and bidi overrides could reorder what is
+// shown, so each becomes "?"; invalid UTF-8 does too. A session or folder name is data,
+// never terminal commands.
+func Clean(s string) string {
+	s = strings.ToValidUTF8(s, "?")
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Bidi_Control, unicode.Zl, unicode.Zp) {
+			return '?'
+		}
+		return r
+	}, s)
 }
 
 // limits renders the rate limit windows. The reset time shows from yellow on, or always

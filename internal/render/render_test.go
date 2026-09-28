@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/LucasAntunesdeAlmeida/sill/internal/config"
 	"github.com/LucasAntunesdeAlmeida/sill/internal/gitinfo"
@@ -293,6 +294,92 @@ func TestLineSeparators(t *testing.T) {
 	if got := r.line("model | session"); got != "M"+Gray+" | "+Reset+"S" {
 		t.Errorf("separator should be dimmed, got %q", got)
 	}
+}
+
+func TestClean(t *testing.T) {
+	cases := map[string]string{
+		"billing-fix":                      "billing-fix",
+		"a\x1b[2J\x1b]0;pwned\x07b":        "a?[2J?]0;pwned?b",
+		"two\nlines\r":                     "two?lines?",
+		"c1\u009bcsi":                      "c1?csi",
+		"rtl\u202eevil":                    "rtl?evil",
+		"sep\u2028line":                    "sep?line",
+		"bad\xffutf8":                      "bad?utf8",
+		"caf\u00e9 \u4e2d\u6587 ok":        "caf\u00e9 \u4e2d\u6587 ok",
+		"tab\there":                        "tab?here",
+		"":                                 "",
+		"\x00":                             "?",
+		"ends with esc\x1b":                "ends with esc?",
+		"zero\u200bwidth space stays":      "zero\u200bwidth space stays",
+		"emoji \U0001F600 stays":           "emoji \U0001F600 stays",
+		"del\x7fchar":                      "del?char",
+		"\u2066isolate\u2069":              "?isolate?",
+		"plain ascii / slashes | and bars": "plain ascii / slashes | and bars",
+	}
+	for in, want := range cases {
+		if got := Clean(in); got != want {
+			t.Errorf("Clean(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// Text from the payload reaches the terminal only through Clean: a hostile session name
+// or folder cannot inject escape sequences or break the line.
+func TestRenderCleansPayloadText(t *testing.T) {
+	p, err := payload.Parse([]byte(`{
+		"model": {"display_name": "M\u001b[31m"},
+		"workspace": {"current_dir": "/tmp/a\u001b]0;title\u0007b"},
+		"session_name": "s\u001b[2J\nsecond line",
+		"effort": {"level": "hi\r"},
+		"version": "1\u0000",
+		"worktree": {"name": "w\u001bx"}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := config.New()
+	_ = s.Set("version", "on")
+	st := State{Settings: s, Layout: s.Layout(), Git: gitinfo.State{Branch: "main\x1b[0m"}}
+	got := Render(p, st)
+	if strings.ContainsAny(got, "\x1b\n\r\x07\x00") {
+		t.Errorf("control characters reached the output: %q", got)
+	}
+	if want := "/tmp/a?]0;title?b  main?[0m  wt:w?x | M?[31m / hi? / s?[2J?second line  v1?"; got != want {
+		t.Errorf("\n got %q\nwant %q", got, want)
+	}
+}
+
+// FuzzRender feeds arbitrary payloads through every layout. Rendering never panics, and
+// the only control characters in the output are the SGR color sequences sill writes itself
+// and the newlines between layout lines.
+func FuzzRender(f *testing.F) {
+	f.Add([]byte(`{"model":{"display_name":"Fable 5.1"},"workspace":{"current_dir":"/home/me/x"},"context_window":{"used_percentage":61.2,"total_input_tokens":122400,"context_window_size":200000},"rate_limits":{"five_hour":{"used_percentage":94,"resets_at":1}},"pr":{"number":42,"review_state":"approved"}}`), 80, "full")
+	f.Add([]byte(`{"session_name":"a\u001b[2J\nb","cwd":"C:\\Users\\me"}`), 0, "compact")
+	f.Add([]byte(`{"context_window":{"used_percentage":-1e308},"rate_limits":{"seven_day":{"used_percentage":1e308,"resets_at":-5}}}`), 3, "compact")
+	f.Add([]byte(`{"session_name":"\u4e2d\u6587\u4e2d\u6587\u4e2d\u6587","model":{"id":"\U0001F600"}}`), 10, "full")
+	f.Fuzz(func(t *testing.T, doc []byte, width int, layout string) {
+		p, err := payload.Parse(doc)
+		if err != nil {
+			return
+		}
+		s := config.New()
+		if s.Set("layout", layout) != nil {
+			return
+		}
+		for _, k := range []string{"cache", "version", "duration"} {
+			_ = s.Set(k, "on")
+		}
+		st := State{Settings: s, Layout: s.Layout(), Home: "/home/me", Width: width % 400, Color: true}
+		out := Render(p, st)
+		for line := range strings.SplitSeq(plain(out), "\n") {
+			if strings.ContainsFunc(line, unicode.IsControl) {
+				t.Fatalf("control character in %q", line)
+			}
+			if st.Width > 1 && visibleWidth(line) > st.Width-1 {
+				t.Fatalf("line %q is %d columns, more than %d", line, visibleWidth(line), st.Width-1)
+			}
+		}
+	})
 }
 
 func TestPct(t *testing.T) {
