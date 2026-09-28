@@ -69,65 +69,119 @@ func Start(path string) time.Time {
 
 // StartReader returns the first timestamp within the first records, or zero.
 func StartReader(r io.Reader) time.Time {
-	sc := newScanner(r)
-	for n := 0; n < headRecords && sc.Scan(); n++ {
-		if t, ok := timestamp(sc.Bytes()); ok {
-			return t
+	var start time.Time
+	n := 0
+	_, _ = readLines(r, true, func(line []byte) bool {
+		if t, ok := timestamp(line); ok {
+			start = t
+			return false
 		}
-	}
-	return time.Time{}
+		n++
+		return n < headRecords
+	})
+	return start
 }
 
 // ScanReader looks for byte markers and never decodes a record, so a 20 MB transcript
-// costs a few tens of milliseconds. A record too long to buffer ends the scan early
-// with what was found so far.
+// costs a few tens of milliseconds.
 func ScanReader(r io.Reader) Activity {
-	var act Activity
-	started := map[string]bool{}
-	finished := map[string]bool{}
-
-	sc := newScanner(r)
-	for sc.Scan() {
-		line := sc.Bytes()
-		if act.Start.IsZero() {
-			if t, ok := timestamp(line); ok {
-				act.Start = t
-			}
-		}
-		if bytes.Contains(line, compactMarker) {
-			act.Compactions++
-		}
-		if bytes.Contains(line, agentHint) || bytes.Contains(line, taskHint) {
-			for _, m := range agentToolUse.FindAllSubmatch(line, -1) {
-				started[string(m[1])] = true
-			}
-		}
-		if bytes.Contains(line, notifyOpen) {
-			for _, id := range between(line, notifyOpen, notifyClose) {
-				finished[id] = true
-			}
-		}
-		if bytes.Contains(line, resultMarker) {
-			for id := range started {
-				if syncResult(line, id) {
-					finished[id] = true
-				}
-			}
-		}
-	}
-	_ = sc.Err() // a truncated or oversized record is not worth failing the render over
-	for id := range started {
-		if !finished[id] {
-			act.Agents++
-		}
-	}
-	return act
+	var s scanner
+	// A read error is not worth failing the render over; what was read still counts.
+	_, _ = readLines(r, true, func(line []byte) bool {
+		s.record(line)
+		return true
+	})
+	return s.activity()
 }
 
-func newScanner(r io.Reader) *bufio.Scanner {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 64*1024), maxRecord)
-	return sc
+// scanner accumulates what the records say, one record at a time.
+type scanner struct {
+	compactions int
+	start       time.Time
+	open        map[string]bool // agent tool uses started and not yet reported finished
+}
+
+func (s *scanner) record(line []byte) {
+	if s.start.IsZero() {
+		if t, ok := timestamp(line); ok {
+			s.start = t
+		}
+	}
+	if bytes.Contains(line, compactMarker) {
+		s.compactions++
+	}
+	if bytes.Contains(line, agentHint) || bytes.Contains(line, taskHint) {
+		for _, m := range agentToolUse.FindAllSubmatch(line, -1) {
+			if s.open == nil {
+				s.open = map[string]bool{}
+			}
+			s.open[string(m[1])] = true
+		}
+	}
+	if bytes.Contains(line, notifyOpen) {
+		for _, id := range between(line, notifyOpen, notifyClose) {
+			delete(s.open, id)
+		}
+	}
+	if bytes.Contains(line, resultMarker) {
+		for id := range s.open {
+			if syncResult(line, id) {
+				delete(s.open, id)
+			}
+		}
+	}
+}
+
+func (s *scanner) activity() Activity {
+	return Activity{Agents: len(s.open), Compactions: s.compactions, Start: s.start}
+}
+
+// readLines calls fn with every line, without its newline, until fn returns false, and
+// returns the bytes consumed through the last complete line handed over. A line longer
+// than maxRecord is skipped whole and reading goes on after it: one huge tool result must
+// not hide everything that follows. A last line without a newline goes to fn only when
+// partial is set; it may still be being written.
+func readLines(r io.Reader, partial bool, fn func(line []byte) bool) (int64, error) {
+	br := bufio.NewReaderSize(r, 64*1024)
+	var (
+		consumed int64
+		long     []byte // a line that outgrew the reader's buffer
+		size     int    // its length so far, counted even while skipping
+		skipping bool
+	)
+	for {
+		chunk, err := br.ReadSlice('\n')
+		size += len(chunk)
+		switch err {
+		case bufio.ErrBufferFull:
+			if !skipping && len(long)+len(chunk) > maxRecord {
+				skipping, long = true, long[:0]
+			}
+			if !skipping {
+				long = append(long, chunk...)
+			}
+			continue
+		case nil:
+			line := chunk[:len(chunk)-1]
+			if len(long) > 0 {
+				long = append(long, line...)
+				line = long
+			}
+			consumed += int64(size)
+			keepGoing := skipping || len(line) > maxRecord || fn(line)
+			long, size, skipping = long[:0], 0, false
+			if !keepGoing {
+				return consumed, nil
+			}
+		case io.EOF:
+			if partial && !skipping && size > 0 && size <= maxRecord {
+				fn(append(long, chunk...))
+			}
+			return consumed, nil
+		default:
+			return consumed, err
+		}
+	}
 }
 
 // timestamp extracts the record's timestamp, an RFC 3339 string.

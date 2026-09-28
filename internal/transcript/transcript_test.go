@@ -66,10 +66,46 @@ func TestStart(t *testing.T) {
 	}
 }
 
-func TestOversizedRecordStopsQuietly(t *testing.T) {
-	huge := `{"type":"system","subtype":"compact_boundary"}` + "\n" + `{"pad":"` + strings.Repeat("x", maxRecord+1) + `"}` + "\n"
-	if act := ScanReader(strings.NewReader(huge)); act.Compactions != 1 {
-		t.Errorf("should keep what was read before the oversized record, got %+v", act)
+func TestOversizedRecordIsSkipped(t *testing.T) {
+	compact := `{"type":"system","subtype":"compact_boundary"}` + "\n"
+	huge := compact + `{"pad":"` + strings.Repeat("x", maxRecord+1) + `","subtype":"compact_boundary"}` + "\n" + compact
+	if act := ScanReader(strings.NewReader(huge)); act.Compactions != 2 {
+		t.Errorf("the oversized record should be skipped and the scan go on, got %+v", act)
+	}
+	// Long but within the limit: read whole, across many buffer fills.
+	long := `{"pad":"` + strings.Repeat("x", 300_000) + `","subtype":"compact_boundary"}` + "\n" + compact
+	if act := ScanReader(strings.NewReader(long)); act.Compactions != 2 {
+		t.Errorf("a long record was not read whole, got %+v", act)
+	}
+}
+
+func TestReadLines(t *testing.T) {
+	collect := func(in string, partial bool) ([]string, int64) {
+		var got []string
+		n, err := readLines(strings.NewReader(in), partial, func(line []byte) bool {
+			got = append(got, string(line))
+			return true
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got, n
+	}
+	if got, n := collect("a\nbb\nccc", false); strings.Join(got, ",") != "a,bb" || n != 5 {
+		t.Errorf("without partial: %q, consumed %d", got, n)
+	}
+	if got, n := collect("a\nbb\nccc", true); strings.Join(got, ",") != "a,bb,ccc" || n != 5 {
+		t.Errorf("with partial: %q, consumed %d (a partial line is never consumed)", got, n)
+	}
+	if got, n := collect("", true); len(got) != 0 || n != 0 {
+		t.Errorf("empty: %q, %d", got, n)
+	}
+	if got, _ := collect("\n\nx\n", false); strings.Join(got, ",") != ",,x" {
+		t.Errorf("blank lines: %q", got)
+	}
+	n, _ := readLines(strings.NewReader("a\nb\nc\n"), false, func(line []byte) bool { return string(line) != "b" })
+	if n != 4 {
+		t.Errorf("stopping at b should consume through b, got %d", n)
 	}
 }
 
