@@ -262,7 +262,7 @@ func (r *renderer) segment(name string) string {
 		}
 		s := r.dim("ctx ") + r.pct(*v, ctxWarn, ctxCrit)
 		if cw := p.ContextWindow; r.st.Layout.Wide && cw.ContextWindowSize > 0 {
-			s += r.dim(fmt.Sprintf(" (%s/%s)", tokens(cw.TotalInputTokens), tokens(cw.ContextWindowSize)))
+			s += r.dim(fmt.Sprintf(" (%s/%s)", Tokens(cw.TotalInputTokens), Tokens(cw.ContextWindowSize)))
 		}
 		return s
 	case "limits":
@@ -399,19 +399,19 @@ func (r *renderer) cost() string {
 	usd, unpriced := c.USD(), c.Unpriced()
 	switch {
 	case usd > 0:
-		s := r.dim("cost ") + dollars(usd)
+		s := r.dim("cost ") + Dollars(usd)
 		if unpriced > 0 {
 			s += "+"
 		}
 		return s
 	case unpriced > 0:
-		return r.dim("tok ") + tokens(int(unpriced))
+		return r.dim("tok ") + Tokens(int(unpriced))
 	}
 	return ""
 }
 
-// dollars formats an amount: <$0.01, $4.12, $1234.
-func dollars(v float64) string {
+// Dollars formats an amount: <$0.01, $4.12, $1234.
+func Dollars(v float64) string {
 	switch {
 	case v < 0.005:
 		return "<$0.01"
@@ -479,9 +479,13 @@ func resetLabel(epoch float64, mode string) string {
 	return until(epoch)
 }
 
-// tokens formats a token count: 850, 9.5k, 122k, 1m.
-func tokens(n int) string {
+// Tokens formats a token count: 850, 9.5k, 122k, 1m, 388m, 2.5b.
+func Tokens(n int) string {
 	switch {
+	case n >= 1_000_000_000:
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(n)/1e9), ".0") + "b"
+	case n >= 10_000_000:
+		return strconv.Itoa(int(math.Round(float64(n)/1e6))) + "m"
 	case n >= 1_000_000:
 		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(n)/1e6), ".0") + "m"
 	case n >= 10_000:

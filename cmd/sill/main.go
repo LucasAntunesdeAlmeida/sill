@@ -50,6 +50,7 @@ Usage:
   sill set <key> <value>  change options, e.g. sill set layout full cache on
   sill unset <key>...     back to the default, e.g. sill unset cache width
   sill demo               render a sample payload with the current settings
+  sill cost [folder]      what sessions cost, per repository or for one repository
   sill doctor             check the setup and what a render sees
   sill hook               record session costs (Claude Code runs it as a session ends)
   sill version            print the version
@@ -102,6 +103,8 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 	case "hook":
 		hook(stdin)
 		return nil
+	case "cost":
+		return costReport(args[1:], stdout)
 	case "version", "-v", "--version":
 		_, err := fmt.Fprintln(stdout, "sill", versionString())
 		return err

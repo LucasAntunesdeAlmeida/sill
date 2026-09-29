@@ -556,10 +556,11 @@ func TestSpanUntilAt(t *testing.T) {
 }
 
 func TestTokens(t *testing.T) {
-	cases := map[int]string{850: "850", 9500: "9.5k", 122400: "122k", 200000: "200k", 1000000: "1m", 1500000: "1.5m"}
+	cases := map[int]string{850: "850", 9500: "9.5k", 122400: "122k", 200000: "200k", 1000000: "1m", 1500000: "1.5m",
+		388_200_000: "388m", 2_472_500_000: "2.5b", 3_000_000_000: "3b"}
 	for n, want := range cases {
-		if got := tokens(n); got != want {
-			t.Errorf("tokens(%d) = %q, want %q", n, got, want)
+		if got := Tokens(n); got != want {
+			t.Errorf("Tokens(%d) = %q, want %q", n, got, want)
 		}
 	}
 }
