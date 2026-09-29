@@ -179,8 +179,9 @@ API would charge; on a Pro or Max plan it is not what you pay.
 `sill set cost on` puts the running total on the line. Claude Code deletes transcripts after 30 days,
 so the `SessionEnd` hook that `sill install` adds keeps one line per session in
 `~/.claude/sill-costs/YYYY-MM.jsonl`: the repository, start and end, dollars and tokens per model.
-That is about 500 bytes a session. Sessions in a linked worktree count toward the repository it belongs
-to. When a session ends, the hook also records any session the ledger missed, such as a terminal that
+That is about 500 bytes a session. Each response counts toward the repository of the folder it was
+made in, so a session that moved from one repository to another is split between them, and sessions in
+a linked worktree count toward the repository it belongs to. When a session ends, the hook also records any session the ledger missed, such as a terminal that
 was killed, or one that was resumed and grew.
 
 ```
