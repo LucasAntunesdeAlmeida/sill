@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -82,9 +83,9 @@ func recordSession(ctx context.Context, path, session, cwdHint string, now time.
 	if session == "" {
 		session = strings.TrimSuffix(filepath.Base(path), ".jsonl")
 	}
-	cwd := act.Cwd
+	cwd := nativePath(act.Cwd)
 	if cwd == "" {
-		cwd = cwdHint
+		cwd = nativePath(cwdHint)
 	}
 	repo := cwd
 	if cwd != "" {
@@ -97,6 +98,28 @@ func recordSession(ctx context.Context, path, session, cwdHint string, now time.
 		Prices: cost.TableVersion, Models: act.Cost,
 	}, true
 }
+
+// nativePath turns the Git Bash spelling of a Windows path (/c/Users/me) that Claude Code
+// sometimes records into the one Windows and git understand (C:\Users\me).
+func nativePath(p string) string {
+	if runtime.GOOS != "windows" {
+		return p
+	}
+	if w, ok := fromMSYS(p); ok {
+		return w
+	}
+	return p
+}
+
+// fromMSYS converts /c/Users/me to C:\Users\me, and reports false for anything else.
+func fromMSYS(p string) (string, bool) {
+	if len(p) < 2 || p[0] != '/' || !isLetter(p[1]) || (len(p) > 2 && p[2] != '/') {
+		return "", false
+	}
+	return strings.ToUpper(p[1:2]) + `:\` + strings.ReplaceAll(strings.TrimPrefix(p[2:], "/"), "/", `\`), true
+}
+
+func isLetter(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }
 
 // sweep records the recent sessions the ledger is missing or has an older total for,
 // newest first, until ctx ends. skip is the transcript the hook already recorded.

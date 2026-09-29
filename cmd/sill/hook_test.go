@@ -130,6 +130,24 @@ func TestHookRecordsAndSweeps(t *testing.T) {
 	}
 }
 
+func TestFromMSYS(t *testing.T) {
+	for in, want := range map[string]string{
+		"/c/Users/me/repo": `C:\Users\me\repo`,
+		"/d/":              `D:\`,
+		"/c":               `C:\`,
+		"/C/x":             `C:\x`,
+	} {
+		if got, ok := fromMSYS(in); !ok || got != want {
+			t.Errorf("fromMSYS(%q) = %q, %v; want %q", in, got, ok, want)
+		}
+	}
+	for _, in := range []string{"", "/", "/home/me", "/cd/x", `C:\Users`, "c/Users", "/1/x"} {
+		if got, ok := fromMSYS(in); ok {
+			t.Errorf("fromMSYS(%q) = %q, should not convert", in, got)
+		}
+	}
+}
+
 // A hook that cannot write its ledger still exits cleanly and leaves the reason for doctor.
 func TestHookFailureGoesToLastError(t *testing.T) {
 	projects := hookEnv(t)
