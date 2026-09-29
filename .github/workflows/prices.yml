@@ -1,0 +1,79 @@
+name: prices
+
+# Refresh internal/cost/prices.json from LiteLLM's price list every week and propose the
+# change as a pull request. Prices are never changed without review: a changed price is
+# a new row dated the day it was noticed, which the reviewer corrects to the day it took
+# effect before merging.
+on:
+  schedule:
+    - cron: "17 6 * * 1" # Mondays, 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: prices
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    env:
+      BRANCH: prices/update
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Refresh the price table
+        run: go run ./internal/cost/pricegen > "$RUNNER_TEMP/changes.txt"
+
+      - name: Check whether anything changed
+        id: diff
+        run: |
+          if git diff --quiet -- internal/cost/prices.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Pull requests opened with GITHUB_TOKEN do not start the ci workflow, so the table
+      # is tested here before it is proposed.
+      - name: Test the new table
+        if: steps.diff.outputs.changed == 'true'
+        run: go test ./internal/cost/... ./internal/transcript/...
+
+      - name: Open or update the pull request
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "LiteLLM's price list differs from internal/cost/prices.json:"
+            echo
+            sed 's/^/- /' "$RUNNER_TEMP/changes.txt"
+            echo
+            echo "Before merging:"
+            echo
+            echo "- A changed price is a new row dated today. Set its \`from\` to the day the"
+            echo "  change took effect, from Anthropic's announcement or pricing page."
+            echo "- A new model's row has no date: it applies from the model's release."
+            echo "- Check the numbers against https://www.anthropic.com/pricing; LiteLLM is"
+            echo "  community-maintained."
+            echo
+            echo "Tests for the table ran in the prices workflow. Close and reopen this pull"
+            echo "request to run ci on it."
+          } > "$RUNNER_TEMP/body.md"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -C "$BRANCH"
+          git commit -q -m "Update model prices from LiteLLM" -- internal/cost/prices.json
+          git push -f origin "$BRANCH"
+          if gh pr view "$BRANCH" --json state --jq .state 2>/dev/null | grep -q OPEN; then
+            gh pr edit "$BRANCH" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh pr create --head "$BRANCH" --title "Update model prices" --body-file "$RUNNER_TEMP/body.md"
+          fi
