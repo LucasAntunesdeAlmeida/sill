@@ -18,7 +18,7 @@ import (
 
 // cacheVersion changes whenever what a scan counts changes, so a newer sill never trusts
 // counts an older one saved.
-const cacheVersion = 2
+const cacheVersion = 3
 
 // headBytes of the transcript are fingerprinted to notice it was replaced or rewritten.
 const headBytes = 4096
@@ -44,7 +44,7 @@ type cacheState struct {
 	Compactions int                 `json:"compactions"`
 	Start       time.Time           `json:"start"`
 	Open        []string            `json:"open,omitempty"` // agents started, not yet finished
-	Cost        cost.Totals         `json:"cost,omitempty"`
+	Cost        Dirs                `json:"cost,omitempty"`
 	Pending     *response           `json:"pending,omitempty"`
 	Last        time.Time           `json:"last"`
 	Cwd         string              `json:"cwd,omitempty"`
@@ -55,9 +55,9 @@ type cacheState struct {
 // subState is how far a subagent's file was read and what its responses cost.
 type subState struct {
 	filePos
-	Cost    cost.Totals `json:"cost,omitempty"`
-	Pending *response   `json:"pending,omitempty"`
-	Last    time.Time   `json:"last"`
+	Cost    Dirs      `json:"cost,omitempty"`
+	Pending *response `json:"pending,omitempty"`
+	Last    time.Time `json:"last"`
 }
 
 // ScanCached is Scan picking up where the previous render stopped: the scan state of each
@@ -123,16 +123,18 @@ func ScanCached(ctx context.Context, path, cacheDir string) Activity {
 	// Every subagent seen so far counts, even one whose file is gone.
 	for _, sub := range st.Subagents {
 		sc := sub.scanner(seen)
-		if t := sc.totals(); t != nil {
-			if act.Cost == nil {
-				act.Cost = cost.Totals{}
+		if d := sc.totals(); d != nil {
+			if act.ByDir == nil {
+				act.ByDir = Dirs{}
 			}
-			act.Cost.Merge(t)
+			act.ByDir.Merge(d)
 		}
 		if sub.Last.After(act.Last) {
 			act.Last = sub.Last
 		}
 	}
+
+	act.Cost = act.ByDir.Total()
 
 	if stateFile != "" && changed {
 		st.Seen = seen.encode()

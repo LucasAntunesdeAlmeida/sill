@@ -228,6 +228,30 @@ func TestSubagentIncremental(t *testing.T) {
 	}
 }
 
+// A session that moved between folders is split by the folder of each response.
+// Subagent records name no folder and collect under "".
+func TestCostByDirectory(t *testing.T) {
+	act := ScanCached(context.Background(), filepath.Join("testdata", "usage.jsonl"), t.TempDir())
+	repo := cost.Totals{}
+	repo.Add("claude-opus-5-5", false, at("2026-09-25T10:00:06Z"), cost.Tokens{Input: 2, Output: 60, CacheRead: 1000, CacheWrite1h: 100})
+	sub := cost.Totals{}
+	sub.Add("claude-haiku-4-5", false, at("2026-09-25T10:01:00Z"), cost.Tokens{Input: 5, Output: 10, CacheWrite5m: 200})
+	sub.Add("claude-opus-5-5", true, at("2026-09-25T10:03:00Z"), cost.Tokens{Input: 3, Output: 100})
+	sub.Add("claude-future-9", false, at("2026-09-25T10:04:00Z"), cost.Tokens{Input: 10, Output: 10})
+	want := map[string]cost.Totals{`C:\work\repo`: repo, `C:\work\repo\sub`: sub, "": subagentCost()}
+	if len(act.ByDir) != len(want) {
+		t.Fatalf("folders = %v", act.ByDir)
+	}
+	for dir, w := range want {
+		if !sameCost(act.ByDir[dir], w) {
+			t.Errorf("%q = %+v\nwant %+v", dir, act.ByDir[dir], w)
+		}
+	}
+	if !sameCost(act.Cost, act.ByDir.Total()) {
+		t.Errorf("Cost is not the sum of the folders")
+	}
+}
+
 // State saved with another price table is recomputed, so dollars never mix two tables.
 func TestScanCachedRepricesOnNewTable(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
@@ -236,9 +260,10 @@ func TestScanCachedRepricesOnNewTable(t *testing.T) {
 	ScanCached(context.Background(), path, cache)
 	stateFile := filepath.Join(cache, cacheName(path))
 	st := loadState(stateFile)
-	u := st.Cost["claude-opus-5-5"]
+	dir := st.Cost[`C:\work\repo`]
+	u := dir["claude-opus-5-5"]
 	u.USD = 1000
-	st.Cost["claude-opus-5-5"] = u
+	dir["claude-opus-5-5"] = u
 	st.Prices = "an-old-table"
 	saveState(cache, stateFile, st)
 	if got := ScanCached(context.Background(), path, cache); !sameCost(got.Cost, mainCost()) {

@@ -19,6 +19,7 @@ type Activity struct {
 	Start       time.Time   // timestamp of the first record, zero when none has one
 	Last        time.Time   // timestamp of the latest response
 	Cost        cost.Totals // tokens and dollars of every response, subagents included
+	ByDir       Dirs        // the same, by the working directory of each response
 	Cwd         string      // working directory of the latest response
 }
 
@@ -111,7 +112,7 @@ type scanner struct {
 	compactions int
 	start       time.Time
 	open        map[string]bool // agent tool uses started and not yet reported finished
-	cost        cost.Totals     // responses that are complete
+	cost        Dirs            // responses that are complete
 	pending     response        // the response whose records are being written
 	seen        seenSet         // responses counted, shared by every file of a session
 	last        time.Time
@@ -132,8 +133,8 @@ func (s *scanner) record(line []byte) {
 		if r.At.After(s.last) {
 			s.last = r.At
 		}
-		if cwd := lastString(line, cwdMarker); cwd != "" {
-			s.cwd = cwd
+		if r.Cwd != "" {
+			s.cwd = r.Cwd
 		}
 	}
 	if bytes.Contains(line, compactMarker) {
@@ -184,33 +185,34 @@ func (s *scanner) commit() {
 	}
 	if tok, ok := s.seen.add(p); ok {
 		if s.cost == nil {
-			s.cost = cost.Totals{}
+			s.cost = Dirs{}
 		}
-		s.cost.Add(p.Model, p.Fast, p.At, tok)
+		s.cost.add(p, tok)
 	}
 	s.pending = response{}
 }
 
 // totals is the complete responses plus the pending one, without committing it: its
 // records may not all be written yet.
-func (s *scanner) totals() cost.Totals {
-	t := cost.Totals{}
-	t.Merge(s.cost)
+func (s *scanner) totals() Dirs {
+	d := Dirs{}
+	d.Merge(s.cost)
 	if p := s.pending; p.ID != "" {
 		if tok, ok := s.seen.peek(p); ok {
-			t.Add(p.Model, p.Fast, p.At, tok)
+			d.add(p, tok)
 		}
 	}
-	if len(t) == 0 {
+	if len(d) == 0 {
 		return nil
 	}
-	return t
+	return d
 }
 
 func (s *scanner) activity() Activity {
+	byDir := s.totals()
 	return Activity{
 		Agents: len(s.open), Compactions: s.compactions, Start: s.start,
-		Last: s.last, Cost: s.totals(), Cwd: s.cwd,
+		Last: s.last, Cost: byDir.Total(), ByDir: byDir, Cwd: s.cwd,
 	}
 }
 

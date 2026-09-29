@@ -46,7 +46,44 @@ type response struct {
 	Model  string      `json:"model"`
 	Fast   bool        `json:"fast,omitempty"`
 	At     time.Time   `json:"at"`
+	Cwd    string      `json:"cwd,omitempty"` // the working directory it was made in
 	Tokens cost.Tokens `json:"tokens"`
+}
+
+// Dirs is a session's cost by the working directory of each response, so a session that
+// moved from one repository to another is split between them. "" collects responses whose
+// record names no directory.
+type Dirs map[string]cost.Totals
+
+func (d Dirs) add(r response, tok cost.Tokens) {
+	t := d[r.Cwd]
+	if t == nil {
+		t = cost.Totals{}
+		d[r.Cwd] = t
+	}
+	t.Add(r.Model, r.Fast, r.At, tok)
+}
+
+// Merge adds every directory of o.
+func (d Dirs) Merge(o Dirs) {
+	for dir, t := range o {
+		if d[dir] == nil {
+			d[dir] = cost.Totals{}
+		}
+		d[dir].Merge(t)
+	}
+}
+
+// Total is every directory together.
+func (d Dirs) Total() cost.Totals {
+	if len(d) == 0 {
+		return nil
+	}
+	t := cost.Totals{}
+	for _, dt := range d {
+		t.Merge(dt)
+	}
+	return t
 }
 
 // parseResponse reads the response in a record, if it is one.
@@ -86,7 +123,10 @@ func parseResponse(line []byte) (response, bool) {
 	} else {
 		tok.CacheWrite5m = number(totals, cacheCreation) // no breakdown: the API's default TTL
 	}
-	r := response{ID: string(id), Model: string(model), Fast: bytes.Contains(usage, fastMarker), Tokens: tok}
+	r := response{
+		ID: string(id), Model: string(model), Fast: bytes.Contains(usage, fastMarker),
+		Cwd: lastString(line, cwdMarker), Tokens: tok,
+	}
 	if i := bytes.LastIndex(line, timestampMarker); i >= 0 {
 		r.At, _ = timestamp(line[i:])
 	}
