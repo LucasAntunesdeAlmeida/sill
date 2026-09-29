@@ -12,6 +12,7 @@ go install ./cmd/sill    # into $GOPATH/bin
 ./sill demo              # preview the line with the current settings
 ./sill doctor            # check the setup against the real ~/.claude
 make bench               # benchmarks; make fuzz runs every fuzz target for FUZZTIME
+go run ./internal/cost/pricegen   # refresh internal/cost/prices.json from LiteLLM
 ```
 
 ## Layout
