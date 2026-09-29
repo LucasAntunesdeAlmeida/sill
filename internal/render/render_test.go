@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"github.com/LucasAntunesdeAlmeida/sill/internal/config"
+	"github.com/LucasAntunesdeAlmeida/sill/internal/cost"
 	"github.com/LucasAntunesdeAlmeida/sill/internal/gitinfo"
 	"github.com/LucasAntunesdeAlmeida/sill/internal/payload"
 	"github.com/LucasAntunesdeAlmeida/sill/internal/transcript"
@@ -317,6 +318,58 @@ func TestSegments(t *testing.T) {
 		if got != c.want {
 			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
 		}
+	}
+}
+
+func TestCostSegment(t *testing.T) {
+	s := config.New()
+	_ = s.Set("cost", "on")
+	p, _ := payload.Parse([]byte(`{}`))
+	cases := []struct {
+		name string
+		c    cost.Totals
+		want string
+	}{
+		{"none", nil, ""},
+		{"priced", cost.Totals{"claude-opus-5-5": {USD: 4.123}}, "cost $4.12"},
+		{"two models", cost.Totals{"claude-opus-5-5": {USD: 1}, "claude-haiku-4-5": {USD: 0.5}}, "cost $1.50"},
+		{"tiny", cost.Totals{"claude-haiku-4-5": {USD: 0.004}}, "cost <$0.01"},
+		{"large", cost.Totals{"claude-fable-5-1": {USD: 1234.4}}, "cost $1234"},
+		{"part unpriced", cost.Totals{"claude-opus-5-5": {USD: 2}, "claude-new": {Unpriced: 5000}}, "cost $2.00+"},
+		{"all unpriced", cost.Totals{"claude-new": {Unpriced: 1_200_000}}, "tok 1.2m"},
+		{"zero tokens", cost.Totals{"claude-opus-5-5": {}}, ""},
+	}
+	for _, c := range cases {
+		st := State{Settings: s, Layout: s.Layout(), Activity: transcript.Activity{Cost: c.c}}
+		r := renderer{p: p, st: st, dropped: map[string]bool{}}
+		if got := plain(r.line("cost")); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// With cost on, the segment follows the budgets and is dropped right after the cache.
+func TestCostInLayouts(t *testing.T) {
+	base := fixedNow(t)
+	s := config.New()
+	_ = s.Set("cost", "on")
+	st := sampleState(s, base)
+	st.Activity.Cost = cost.Totals{"claude-fable-5-1": {USD: 4.12}}
+	p := samplePayload(t, base)
+	want := "ctx 61%  5h 94% (1h20)  7d 72% (2d2h)  cost $4.12  agents 2  compact 1 | ~/.../utils/sill  feature/billing MERGING  wt  #42 + | Fable 5.1 / high / billing-fix  up 2h15"
+	if got := plain(Render(p, st)); got != want {
+		t.Errorf("\n got %q\nwant %q", got, want)
+	}
+	st.Width = 60
+	if got := plain(Render(p, st)); got != "ctx 61%  5h 94%  7d 72% | sill | Fable 5.1" {
+		t.Errorf("narrow: %q", got)
+	}
+
+	_ = s.Set("layout", "full")
+	st = sampleState(s, base)
+	st.Activity.Cost = cost.Totals{"claude-fable-5-1": {USD: 4.12}}
+	if got := strings.Split(plain(Render(p, st)), "\n")[1]; got != "ctx 61% (122k/200k)  5h 94% (1h20)  7d 72% (2d2h)  cost $4.12" {
+		t.Errorf("full: %q", got)
 	}
 }
 

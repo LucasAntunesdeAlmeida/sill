@@ -45,6 +45,7 @@ var Options = []Option{
 	{"ctx", "on", Bool, nil, "context window used"},
 	{"limits", "on", Bool, nil, "5h / 7d / spend rate limits"},
 	{"cache", "off", Bool, nil, "prompt cache: time until the cached prefix goes cold"},
+	{"cost", "off", Bool, nil, "session cost at API list prices, subagents included (read from the transcript)"},
 	{"agents", "on", Bool, nil, "background agents still running (read from the transcript)"},
 	{"compactions", "on", Bool, nil, "times the context was compacted (read from the transcript)"},
 	{"duration", "off", Bool, nil, "time since the session started (read from the transcript)"},
@@ -90,11 +91,11 @@ type Layout struct {
 // Presets are the built-in layouts.
 var Presets = map[string]Layout{
 	"compact": {Lines: []string{
-		"ctx limits cache agents compactions | path git worktree pr | model / effort / session duration version",
+		"ctx limits cache cost agents compactions | path git worktree pr | model / effort / session duration version",
 	}},
 	"full": {Lines: []string{
 		"path git worktree pr",
-		"ctx limits cache",
+		"ctx limits cache cost",
 		"model / effort / session duration agents compactions version",
 	}, Wide: true},
 }

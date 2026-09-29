@@ -16,6 +16,7 @@ import (
 
 	"github.com/LucasAntunesdeAlmeida/sill/internal/atomicfile"
 	"github.com/LucasAntunesdeAlmeida/sill/internal/config"
+	"github.com/LucasAntunesdeAlmeida/sill/internal/cost"
 	"github.com/LucasAntunesdeAlmeida/sill/internal/gitinfo"
 	"github.com/LucasAntunesdeAlmeida/sill/internal/install"
 	"github.com/LucasAntunesdeAlmeida/sill/internal/payload"
@@ -224,7 +225,7 @@ func gather(ctx context.Context, p *payload.Payload) render.State {
 		st.Git = gitinfo.Lookup(ctx, p.CurrentDir(), s.On("dirty"))
 	}
 	switch {
-	case s.On("agents") || s.On("compactions"):
+	case s.On("agents") || s.On("compactions") || s.On("cost"):
 		st.Activity = transcript.ScanCached(ctx, p.TranscriptPath, transcriptCache())
 	case s.On("duration"):
 		st.Activity.Start = transcript.Start(p.TranscriptPath)
@@ -340,7 +341,10 @@ func demo(stdout io.Writer) error {
 		Width:    width(s),
 		Color:    colorEnabled(s),
 		Git:      gitinfo.State{Branch: "feature/billing", Status: "MERGING", Dirty: true},
-		Activity: transcript.Activity{Agents: 2, Compactions: 1, Start: now.Add(-135 * time.Minute)},
+		Activity: transcript.Activity{
+			Agents: 2, Compactions: 1, Start: now.Add(-135 * time.Minute),
+			Cost: cost.Totals{"claude-fable-5-1": {USD: 4.12}},
+		},
 	}
 	_, err = fmt.Fprintln(stdout, render.Render(p, st))
 	return err

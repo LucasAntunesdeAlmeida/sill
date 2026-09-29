@@ -97,6 +97,7 @@ var degradeSteps = []func(*renderer){
 	func(r *renderer) { r.dropped["compactions"] = true },
 	func(r *renderer) { r.dropped["agents"] = true },
 	func(r *renderer) { r.dropped["cache"] = true },
+	func(r *renderer) { r.dropped["cost"] = true },
 	func(r *renderer) { r.dropped["effort"] = true },
 	func(r *renderer) { r.dropped["worktree"] = true },
 	func(r *renderer) { r.dropped["pr"] = true },
@@ -275,6 +276,8 @@ func (r *renderer) segment(name string) string {
 			return r.dim("cache ") + until(*pc.ExpiresAt)
 		}
 		return r.dim("cache ") + r.pal.yellow + "cold" + r.pal.reset
+	case "cost":
+		return r.cost()
 	case "agents":
 		if n := r.st.Activity.Agents; n > 0 {
 			return r.dim("agents ") + strconv.Itoa(n)
@@ -386,6 +389,36 @@ func (r *renderer) limits() string {
 		parts = append(parts, s)
 	}
 	return strings.Join(parts, sepSpace)
+}
+
+// cost renders what the session cost at list prices. Tokens of a model without a price
+// make the figure a lower bound, marked with a +; when nothing had a price the tokens
+// themselves are shown instead of a zero.
+func (r *renderer) cost() string {
+	c := r.st.Activity.Cost
+	usd, unpriced := c.USD(), c.Unpriced()
+	switch {
+	case usd > 0:
+		s := r.dim("cost ") + dollars(usd)
+		if unpriced > 0 {
+			s += "+"
+		}
+		return s
+	case unpriced > 0:
+		return r.dim("tok ") + tokens(int(unpriced))
+	}
+	return ""
+}
+
+// dollars formats an amount: <$0.01, $4.12, $1234.
+func dollars(v float64) string {
+	switch {
+	case v < 0.005:
+		return "<$0.01"
+	case v < 999.995:
+		return fmt.Sprintf("$%.2f", v)
+	}
+	return fmt.Sprintf("$%.0f", v)
 }
 
 // pct formats a percentage, colored from warn (yellow) and crit (red). Rounding is half
