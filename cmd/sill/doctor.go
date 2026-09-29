@@ -12,8 +12,11 @@ import (
 	"time"
 
 	"github.com/LucasAntunesdeAlmeida/sill/internal/config"
+	"github.com/LucasAntunesdeAlmeida/sill/internal/cost"
 	"github.com/LucasAntunesdeAlmeida/sill/internal/gitinfo"
 	"github.com/LucasAntunesdeAlmeida/sill/internal/install"
+	"github.com/LucasAntunesdeAlmeida/sill/internal/ledger"
+	"github.com/LucasAntunesdeAlmeida/sill/internal/render"
 	"github.com/LucasAntunesdeAlmeida/sill/internal/term"
 	"github.com/LucasAntunesdeAlmeida/sill/internal/transcript"
 )
@@ -49,9 +52,11 @@ func doctor(stdout io.Writer) error {
 	c := &checks{w: stdout}
 	s := checkSettings(c)
 	checkStatusLine(c, exe)
+	checkHook(c, exe)
 	checkGit(c, s)
 	checkTerminal(c, s)
 	checkTranscript(c)
+	checkLedger(c)
 	checkLastError(c)
 	if c.failed {
 		return errors.New("the status line will not work until the FAIL lines are fixed")
@@ -93,6 +98,73 @@ func checkStatusLine(c *checks, exe string) {
 	}
 	c.warn("settings.json runs %s, not this binary", target)
 	c.detail("run `sill install` from the binary you want Claude Code to use")
+}
+
+// checkHook looks for the SessionEnd hook that records session costs. Without it the
+// ledger only grows when `sill cost` runs, and misses what Claude Code deleted meanwhile.
+func checkHook(c *checks, exe string) {
+	hooks, err := install.HookCommands(config.Dir())
+	switch {
+	case err != nil:
+		c.warn("cannot read the hooks in settings.json: %v", err)
+		return
+	case len(hooks) == 0:
+		c.warn("no %s hook records session costs; run `sill install` to add it", install.HookEvent)
+		return
+	}
+	for _, h := range hooks {
+		target := install.CommandPath(h)
+		ti, err := os.Stat(target)
+		if err != nil {
+			c.warn("the %s hook runs %s, which does not exist; run `sill install`", install.HookEvent, target)
+			continue
+		}
+		if ei, err := os.Stat(exe); err == nil && os.SameFile(ti, ei) {
+			c.ok("a %s hook records session costs", install.HookEvent)
+		} else {
+			c.warn("the %s hook runs %s, not this binary", install.HookEvent, target)
+		}
+	}
+}
+
+// checkLedger reports the cost ledger and the models it could not price.
+func checkLedger(c *checks) {
+	entries, bad, err := ledger.Read(ledgerDir())
+	if err != nil {
+		c.warn("cost ledger: %v", err)
+		return
+	}
+	if len(entries) == 0 {
+		c.ok("no session costs recorded yet")
+		return
+	}
+	var size int64
+	files, _ := filepath.Glob(filepath.Join(ledgerDir(), "*.jsonl"))
+	for _, f := range files {
+		if fi, err := os.Stat(f); err == nil {
+			size += fi.Size()
+		}
+	}
+	total := cost.Totals{}
+	for _, e := range entries {
+		total.Merge(e.Models)
+	}
+	c.ok("cost ledger: %d session(s), %s at list prices, %d file(s), %.1f KB",
+		len(entries), render.Dollars(total.USD()), len(files), float64(size)/1024)
+	c.detail("%s", filepath.ToSlash(ledgerDir()))
+	if bad > 0 {
+		c.warn("cost ledger: %d line(s) could not be read and are skipped", bad)
+	}
+	warnUnpriced(c, total)
+}
+
+// warnUnpriced names the models whose tokens had no price, so their cost is missing.
+func warnUnpriced(c *checks, t cost.Totals) {
+	for _, m := range t.Models() {
+		if n := t[m].Unpriced; n > 0 {
+			c.warn("no price for %s (%s tokens): costs that include it are a lower bound", render.Clean(m), render.Tokens(int(n)))
+		}
+	}
 }
 
 // checkSettings validates sill.json and returns the settings a render would use.
@@ -187,7 +259,8 @@ func checkTranscript(c *checks) {
 	if fi, err := os.Stat(path); err == nil {
 		size = fi.Size()
 	}
-	c.ok("latest transcript: %d records, %d agent(s) running, %d compaction(s)", rep.Records, rep.Activity.Agents, rep.Activity.Compactions)
+	c.ok("latest transcript: %d records, %d agent(s) running, %d compaction(s), %d response(s)",
+		rep.Records, rep.Activity.Agents, rep.Activity.Compactions, rep.Responses)
 	c.detail("%s (%.1f MB)", filepath.ToSlash(path), float64(size)/(1<<20))
 
 	cache, err := os.MkdirTemp("", "sill-doctor")
@@ -202,7 +275,7 @@ func checkTranscript(c *checks) {
 		c.warn("transcript: %s", d)
 	}
 	if len(rep.Drift()) > 0 {
-		c.detail("the transcript format may have changed; agents and compactions can be undercounted")
+		c.detail("the transcript format may have changed; agents, compactions and costs can be undercounted")
 		c.detail("please report it with your Claude Code version")
 	}
 }
