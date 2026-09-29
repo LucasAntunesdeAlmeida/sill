@@ -87,16 +87,45 @@ func recordSession(ctx context.Context, path, session, cwdHint string, now time.
 	if cwd == "" {
 		cwd = nativePath(cwdHint)
 	}
-	repo := cwd
-	if cwd != "" {
-		repo = gitinfo.Root(cwd)
+	// Each response counts toward the repository of the folder it was made in.
+	byRepo := map[string]cost.Totals{}
+	for dir, t := range act.ByDir {
+		dir = nativePath(dir)
+		if dir == "" {
+			dir = cwd
+		}
+		repo := dir
+		if dir != "" {
+			repo = gitinfo.Root(dir)
+		}
+		if byRepo[repo] == nil {
+			byRepo[repo] = cost.Totals{}
+		}
+		byRepo[repo].Merge(t)
 	}
-	return ledger.Entry{
-		Session: session, Repo: repo, Cwd: cwd,
+	parts := make([]ledger.Part, 0, len(byRepo))
+	for repo, t := range byRepo {
+		parts = append(parts, ledger.Part{Repo: repo, Models: t})
+	}
+	slices.SortFunc(parts, func(a, b ledger.Part) int {
+		if ua, ub := a.Models.USD(), b.Models.USD(); ua != ub {
+			if ua > ub {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a.Repo, b.Repo)
+	})
+	e := ledger.Entry{
+		V: ledger.Version, Session: session, Repo: parts[0].Repo, Cwd: cwd,
 		Start: act.Start, End: act.Last, Written: now,
 		USD: act.Cost.USD(), Unpriced: act.Cost.Unpriced(),
 		Prices: cost.TableVersion, Models: act.Cost,
-	}, true
+	}
+	if len(parts) > 1 {
+		e.Parts = parts
+	}
+	return e, true
 }
 
 // nativePath turns the Git Bash spelling of a Windows path (/c/Users/me) that Claude Code
@@ -121,16 +150,20 @@ func fromMSYS(p string) (string, bool) {
 
 func isLetter(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }
 
-// sweep records the recent sessions the ledger is missing or has an older total for,
-// newest first, until ctx ends. skip is the transcript the hook already recorded.
+// sweep records the recent sessions the ledger is missing, has an older total for or
+// recorded in an older format, newest first, until ctx ends. skip is the transcript the
+// hook already recorded.
 func sweep(ctx context.Context, skip string, now time.Time) ([]ledger.Entry, error) {
 	known, _, err := ledger.Read(ledgerDir())
 	if err != nil {
 		return nil, err
 	}
+	// A line from before sessions were split by repository counts as missing.
 	written := map[string]time.Time{}
 	for _, e := range known {
-		written[e.Session] = e.Written
+		if e.V >= ledger.Version {
+			written[e.Session] = e.Written
+		}
 	}
 	type candidate struct {
 		path, session string

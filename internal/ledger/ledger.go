@@ -26,10 +26,17 @@ import (
 // DirName is the ledger folder inside the Claude config directory.
 const DirName = "sill-costs"
 
+// Version is the format of the lines written now. 2 splits a session between the
+// repositories its responses were made in; a line without a version put a whole session
+// under the directory of its latest response.
+const Version = 2
+
 // Entry is one session's line.
 type Entry struct {
+	V        int         `json:"v,omitempty"`
 	Session  string      `json:"session"`
-	Repo     string      `json:"repo"` // the main repository folder, or the working directory
+	Repo     string      `json:"repo"`            // where most of the cost went: a repository folder, or the working directory
+	Parts    []Part      `json:"parts,omitempty"` // every repository's share, when there is more than one
 	Cwd      string      `json:"cwd,omitempty"`
 	Start    time.Time   `json:"start"`
 	End      time.Time   `json:"end"` // the latest response
@@ -37,7 +44,21 @@ type Entry struct {
 	USD      float64     `json:"usd"`
 	Unpriced int64       `json:"unpriced,omitempty"` // tokens without a price, not in USD
 	Prices   string      `json:"prices"`             // the price table the dollars came from
-	Models   cost.Totals `json:"models"`
+	Models   cost.Totals `json:"models"`             // the whole session
+}
+
+// Part is the share of a session made in one repository.
+type Part struct {
+	Repo   string      `json:"repo"`
+	Models cost.Totals `json:"models"`
+}
+
+// Shares is how the session divides between repositories: its parts, or all of it in Repo.
+func (e Entry) Shares() []Part {
+	if len(e.Parts) > 0 {
+		return e.Parts
+	}
+	return []Part{{Repo: e.Repo, Models: e.Models}}
 }
 
 // Append writes entries to the month file of their Written time, one write per file.
@@ -148,24 +169,28 @@ func readFile(r io.Reader, latest map[string]Entry) (bad int, err error) {
 // Repo is the sessions of one repository added up.
 type Repo struct {
 	Repo     string
-	Sessions int
-	Last     time.Time // the latest response of any of its sessions
-	Cost     cost.Totals
+	Sessions int // sessions with a share here
+
+	Last time.Time // the latest response of any of its sessions
+	Cost cost.Totals
 }
 
-// ByRepo adds up entries per repository, most expensive first.
+// ByRepo adds up entries per repository, most expensive first. A session split between
+// repositories counts in each, with its share there.
 func ByRepo(entries []Entry) []Repo {
 	byName := map[string]*Repo{}
 	for _, e := range entries {
-		r, ok := byName[e.Repo]
-		if !ok {
-			r = &Repo{Repo: e.Repo, Cost: cost.Totals{}}
-			byName[e.Repo] = r
-		}
-		r.Sessions++
-		r.Cost.Merge(e.Models)
-		if e.End.After(r.Last) {
-			r.Last = e.End
+		for _, p := range e.Shares() {
+			r, ok := byName[p.Repo]
+			if !ok {
+				r = &Repo{Repo: p.Repo, Cost: cost.Totals{}}
+				byName[p.Repo] = r
+			}
+			r.Sessions++
+			r.Cost.Merge(p.Models)
+			if e.End.After(r.Last) {
+				r.Last = e.End
+			}
 		}
 	}
 	repos := make([]Repo, 0, len(byName))

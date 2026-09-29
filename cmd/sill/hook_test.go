@@ -148,6 +148,76 @@ func TestFromMSYS(t *testing.T) {
 	}
 }
 
+// A session that moved from one repository to another is split between them, and the
+// report shows each its share.
+func TestSessionSplitBetweenRepositories(t *testing.T) {
+	projects := hookEnv(t)
+	root := t.TempDir()
+	alpha, beta := filepath.Join(root, "alpha"), filepath.Join(root, "beta")
+	for _, r := range []string{alpha, beta} {
+		if err := os.MkdirAll(filepath.Join(r, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first := strings.SplitAfter(transcriptDoc(alpha, 100_000), "\n")
+	second := strings.SplitAfter(transcriptDoc(filepath.Join(beta, "pkg"), 300_000), "\n")[1]
+	path := filepath.Join(projects, "p", "moved.jsonl")
+	writeFile(t, path, first[0]+first[1]+strings.Replace(second, "msg_1", "msg_2", 1))
+
+	runHook(t, map[string]string{"transcript_path": path})
+	entries, _ := readLedger(t)
+	if len(entries) != 1 {
+		t.Fatalf("entries = %+v", entries)
+	}
+	e := entries[0]
+	if e.V != ledger.Version || e.Repo != beta || len(e.Parts) != 2 || e.Parts[0].Repo != beta || e.Parts[1].Repo != alpha {
+		t.Fatalf("entry = %+v", e)
+	}
+	if e.Parts[0].Models.Tokens().Output != 300_000 || e.Parts[1].Models.Tokens().Output != 100_000 || e.Models.Tokens().Output != 400_000 {
+		t.Errorf("shares = %+v", e.Parts)
+	}
+
+	var out bytes.Buffer
+	if err := run([]string{"cost"}, nil, &out); err != nil {
+		t.Fatal(err)
+	}
+	text := collapse(out.String())
+	for _, want := range []string{"/beta 1 0 300k $6.00", "/alpha 1 0 100k $2.00", "total 1 0 400k $8.00"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("report lacks %q:\n%s", want, out.String())
+		}
+	}
+	out.Reset()
+	if err := run([]string{"cost", alpha}, nil, &out); err != nil {
+		t.Fatal(err)
+	}
+	if text := collapse(out.String()); !strings.Contains(text, "100k $2.00 opus-5-5 moved*") || !strings.Contains(text, "only its share here") {
+		t.Errorf("alpha report:\n%s", out.String())
+	}
+}
+
+// Lines written before sessions were split are recorded again while the transcript lasts.
+func TestSweepRewritesOldLines(t *testing.T) {
+	projects := hookEnv(t)
+	repo := t.TempDir()
+	path := filepath.Join(projects, "p", "old.jsonl")
+	writeFile(t, path, transcriptDoc(repo, 1000))
+	// Recorded after the transcript last changed: only the format asks for a new line.
+	changed := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(path, changed, changed); err != nil {
+		t.Fatal(err)
+	}
+	old := ledger.Entry{Session: "old", Repo: "/somewhere/else", Written: time.Now().Add(-time.Hour), Models: cost.Totals{}}
+	if err := ledger.Append(ledgerDir(), old); err != nil {
+		t.Fatal(err)
+	}
+	runHook(t, map[string]string{})
+	entries, _ := readLedger(t)
+	if len(entries) != 1 || entries[0].V != ledger.Version || entries[0].Repo != repo {
+		t.Errorf("entries = %+v", entries)
+	}
+}
+
 // A hook that cannot write its ledger still exits cleanly and leaves the reason for doctor.
 func TestHookFailureGoesToLastError(t *testing.T) {
 	projects := hookEnv(t)

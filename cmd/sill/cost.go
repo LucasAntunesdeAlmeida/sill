@@ -83,21 +83,29 @@ func sessionTable(w io.Writer, entries []ledger.Entry, repo, home string) error 
 	rows := [][]string{{"started", "in", "out", "cost", "models", "session"}}
 	total := cost.Totals{}
 	n := 0
+	split := false
 	for _, e := range entries {
-		if !samePath(e.Repo, repo) {
-			continue
+		for _, p := range e.Shares() {
+			if !samePath(p.Repo, repo) {
+				continue
+			}
+			n++
+			var models []string
+			for _, m := range p.Models.Models() {
+				models = append(models, strings.TrimPrefix(m, "claude-"))
+			}
+			id := short(e.Session)
+			if len(e.Parts) > 1 {
+				id += "*"
+				split = true
+			}
+			rows = append(rows, []string{
+				e.Start.Local().Format("2006-01-02 15:04"),
+				render.Tokens(int(p.Models.Tokens().In())), render.Tokens(int(p.Models.Tokens().Output)),
+				costCell(p.Models), render.Clean(strings.Join(models, ",")), render.Clean(id),
+			})
+			total.Merge(p.Models)
 		}
-		n++
-		var models []string
-		for _, m := range e.Models.Models() {
-			models = append(models, strings.TrimPrefix(m, "claude-"))
-		}
-		rows = append(rows, []string{
-			e.Start.Local().Format("2006-01-02 15:04"),
-			render.Tokens(int(e.Models.Tokens().In())), render.Tokens(int(e.Models.Tokens().Output)),
-			costCell(e.Models), render.Clean(strings.Join(models, ",")), render.Clean(short(e.Session)),
-		})
-		total.Merge(e.Models)
 	}
 	shown := render.Clean(render.DisplayPath(repo, home, 0))
 	if n == 0 {
@@ -108,6 +116,9 @@ func sessionTable(w io.Writer, entries []ledger.Entry, repo, home string) error 
 	rows = append(rows, []string{"total", render.Tokens(int(total.Tokens().In())), render.Tokens(int(total.Tokens().Output)),
 		costCell(total), fmt.Sprintf("%d session(s)", n), ""})
 	writeTable(w, rows, 1, 3)
+	if split {
+		fmt.Fprintln(w, "\n* the session also worked in another repository; only its share here is shown.")
+	}
 	return footer(w, total)
 }
 

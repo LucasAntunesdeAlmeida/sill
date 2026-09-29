@@ -66,6 +66,28 @@ func TestAppendAndRead(t *testing.T) {
 	}
 }
 
+// A split session counts in each repository with its share; a line without parts counts
+// whole under its Repo.
+func TestByRepoWithShares(t *testing.T) {
+	part := func(repo string, usd float64) Part {
+		return Part{Repo: repo, Models: cost.Totals{"claude-opus-5-5": {USD: usd}}}
+	}
+	split := entry("s1", "/beta", t0, 8)
+	split.V, split.Parts = Version, []Part{part("/beta", 6), part("/alpha", 2)}
+	old := entry("s0", "/alpha", t0.Add(-time.Hour), 1)
+	repos := ByRepo([]Entry{split, old})
+	got := map[string]string{}
+	for _, r := range repos {
+		got[r.Repo] = fmt.Sprintf("%d sessions $%g", r.Sessions, r.Cost.USD())
+	}
+	if got["/beta"] != "1 sessions $6" || got["/alpha"] != "2 sessions $3" || len(got) != 2 {
+		t.Errorf("by repo = %v", got)
+	}
+	if len(old.Shares()) != 1 || old.Shares()[0].Repo != "/alpha" {
+		t.Errorf("old shares = %+v", old.Shares())
+	}
+}
+
 // A line cut short by a crash is skipped, and the next append starts on a line of its own.
 func TestReadSurvivesABrokenLine(t *testing.T) {
 	dir := t.TempDir()
