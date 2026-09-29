@@ -30,9 +30,10 @@ The macOS binaries are not signed. If one was downloaded through a browser, macO
 clear that with `xattr -d com.apple.quarantine sill-darwin-arm64`.
 
 `sill install` writes the `statusLine` entry into `~/.claude/settings.json` (backed up first to `settings.json.sill.bak`, other
-settings untouched) pointing at the binary where it is. Restart Claude Code. The binary needs to be on
+settings untouched) pointing at the binary where it is, and a `SessionEnd` hook that records what each
+session cost (see Costs). Restart Claude Code. The binary needs to be on
 your PATH only so that `sill set` is easy to type; `go install` puts it in `$GOPATH/bin`, which usually is.
-It honors `CLAUDE_CONFIG_DIR` if you use one. `sill uninstall` removes the entry again.
+It honors `CLAUDE_CONFIG_DIR` if you use one. `sill uninstall` removes both entries again.
 
 Requirements: none for most repositories, since the branch is read from `.git/HEAD`. `git` on PATH
 is used for `dirty` and for the repositories whose HEAD file cannot answer (see How it works). On
@@ -50,6 +51,7 @@ the path and the model. Labels and separators are gray; only budgets change colo
 | `ctx` | on | `ctx 61%`, yellow at 60, red at 80 | payload |
 | `limits` | on | `5h 94% (1h20)`, `7d`, `spend`; yellow at 70, red at 90. From yellow on, the reset time follows | payload |
 | `cache` | off | `cache 42m` while the prompt cache is warm, `cache cold` after | payload |
+| `cost` | off | `cost $4.12`, the session at API list prices, subagents included; `+` when a model had no price, `tok 1.2m` when none had | transcript |
 | `agents` | on | `agents 2`, background agents still running | transcript |
 | `compactions` | on | `compact 1`, how many times the context was compacted | transcript |
 | `duration` | off | `up 2h15`, time since the session started | transcript |
@@ -109,8 +111,8 @@ treatment (long path, token counts, all reset times).
 sill asks the console for its width (the Windows console API or `/dev/tty`, since stdout is a pipe to
 Claude Code) and, when a line would overflow, gives up detail in a fixed order instead of wrapping:
 the path shrinks to `~/.../sill` and then to `sill`, limits lose their reset times, then segments drop
-one by one: `version`, `duration`, `session`, `compactions`, `agents`, `cache`, `effort`, `worktree`,
-`pr`, `git`, `path`. Budgets and the model go last. Widths are counted in terminal columns, so a
+one by one: `version`, `duration`, `session`, `compactions`, `agents`, `cache`, `cost`, `effort`,
+`worktree`, `pr`, `git`, `path`. Budgets and the model go last. Widths are counted in terminal columns, so a
 folder or session name in Chinese, Japanese or Korean, or with an emoji, counts double.
 `sill settings` prints the detected width; if it says unknown, set `width` yourself.
 
@@ -118,13 +120,15 @@ folder or session name in Chinese, Japanese or Korean, or with an emoji, counts 
 
 ```
 sill                    render; Claude Code pipes its JSON on stdin, you never run this by hand
-sill install            point settings.json at this binary
-sill uninstall          remove the statusLine entry again
+sill install            point settings.json at this binary, with the cost hook
+sill uninstall          remove the statusLine entry and the hook again
 sill settings           list every option with its current value and the detected width
 sill set <key> <value>  change options, several pairs at once
 sill unset <key>...     back to the default; `sill unset lines` drops custom lines
 sill demo               render a sample payload with the current settings
+sill cost [folder]      what sessions cost, per repository or for one repository
 sill doctor             check the setup and what a render sees
+sill hook               record session costs; Claude Code runs it as a session ends
 ```
 
 ```
@@ -135,20 +139,24 @@ sill set width 120
 sill unset width
 ```
 
-`sill doctor` prints one line per check: whether `settings.json` runs this binary, problems in
-`sill.json` (unknown keys, bad values, names in `lines` that are not segments), how the branch is
-read and how long it takes, the terminal width, the newest transcript with its scan times, and the
-last render that failed. It also compares the transcript markers sill relies on with a looser search,
-so if a Claude Code update changes the transcript format it says so rather than showing no agents:
+`sill doctor` prints one line per check: whether `settings.json` runs this binary and has the cost
+hook, problems in `sill.json` (unknown keys, bad values, names in `lines` that are not segments), how
+the branch is read and how long it takes, the terminal width, the newest transcript with its scan
+times, the cost ledger with any model it has no price for, and the last render that failed. It also
+compares the transcript markers sill relies on with a looser search, so if a Claude Code update
+changes the transcript format it says so rather than showing no agents or a low cost:
 
 ```
 ok    sill.json is valid, 1 option(s) changed
 ok    settings.json runs this binary
+ok    a SessionEnd hook records session costs
 ok    git: branch main read from .git/HEAD in 0.5 ms, no git process
 ok    terminal width 120 columns
-ok    latest transcript: 1804 records, 0 agent(s) running, 0 compaction(s)
+ok    latest transcript: 1804 records, 0 agent(s) running, 0 compaction(s), 612 response(s)
       C:/Users/me/.claude/projects/.../5f2c.jsonl (24.4 MB)
       full scan 76.0 ms, a render with nothing new 1.5 ms
+ok    cost ledger: 132 session(s), $1430 at list prices, 1 file(s), 61.8 KB
+      C:/Users/me/.claude/sill-costs
 ok    no failed render recorded
 ```
 
@@ -161,6 +169,45 @@ Inside a Claude Code session, prefix the command with `!` to run it without a mo
 The line picks up the change on its next refresh. Settings live in `~/.claude/sill.json` and the file
 only contains what you changed, so `sill settings` is the place to see everything.
 
+## Costs
+
+What a session costs is worked out from the token counts in its transcript and a table of Anthropic's
+list prices per million tokens. Input, output, cache reads and cache writes (5 minute and 1 hour) are
+priced separately, fast mode at its own rate, and subagents count with their session. It is what the
+API would charge; on a Pro or Max plan it is not what you pay.
+
+`sill set cost on` puts the running total on the line. Claude Code deletes transcripts after 30 days,
+so the `SessionEnd` hook that `sill install` adds keeps one line per session in
+`~/.claude/sill-costs/YYYY-MM.jsonl`: the repository, start and end, dollars and tokens per model.
+That is about 500 bytes a session. Sessions in a linked worktree count toward the repository it belongs
+to. When a session ends, the hook also records any session the ledger missed, such as a terminal that
+was killed, or one that was resumed and grew.
+
+```
+$ sill cost
+repo                         sessions     in   out     cost        last
+~/source/repos/invoicing           43   388m  1.5m  $346.06  2026-09-29
+~/.../utils/sill                    6    63m  533k   $50.49  2026-09-29
+total                              49   451m  2.0m  $396.55
+
+$ sill cost .
+~/source/repos/utils/sill
+
+         started     in   out    cost  models        session
+2026-09-25 18:38  10.4m  189k  $22.16  fable-5-1     3b3d5c80
+2026-09-29 18:26  22.5m  131k   $9.44  opus-5-5      d0f565cd
+```
+
+Each price row carries the date it took effect, and a response is priced at the rate of the day it was
+made, so a price change never rewrites what an old session cost. A model the table does not know shows
+its tokens instead of a made-up price, and `sill doctor` names it. The table in
+`internal/cost/prices.json` comes from [LiteLLM's price list](https://github.com/BerriAI/litellm);
+a weekly workflow proposes a pull request when that list changes.
+
+Claude Code writes each response to the transcript several times, once per content block, and a forked
+subagent's transcript starts with a copy of its parent's history. sill counts every response once, at
+its most complete record, and was checked against a full decode of 132 real sessions.
+
 ## How it works
 
 Claude Code runs the command on every update and pipes a JSON payload on stdin. sill reads the fields
@@ -170,15 +217,16 @@ a millisecond, where starting git costs 20 ms or more on Windows. git itself run
 cannot answer (`GIT_DIR` or `GIT_WORK_TREE` set, a reftable repository, an unusual HEAD), and
 `git status` only when you turn `dirty` on, so large repos stay fast.
 
-Agents, compactions and the session start come from the session transcript, whose path is in the
+Agents, compactions, cost and the session start come from the session transcript, whose path is in the
 payload. sill looks for byte markers and never decodes a record: the compaction boundary, `Agent` tool
-calls, the task notification that names a finished agent, and the first record's timestamp. The scan
+calls, the task notification that names a finished agent, the usage of each response, and the first
+record's timestamp. Subagent transcripts next to it are read the same way, for their cost. The scan
 is incremental: where it stopped and what it counted are kept per session in the user cache directory
 (`~/.cache/sill`, `~/Library/Caches/sill` or `%LocalAppData%\sill`, or `SILL_CACHE_DIR`), so a render
 reads only what was appended since the last one, about 1 ms against 45 ms for a full pass over a 25 MB
 transcript. A transcript that shrank or was rewritten is scanned again from the start, and the state
-of sessions untouched for 30 days is removed. With `agents` and `compactions` off, only the head of
-the file is read for the start time.
+of sessions untouched for 30 days is removed. With `agents`, `compactions` and `cost` off, only the
+head of the file is read for the start time.
 
 A render gets one second in total for git and the transcript. Past it, git is not waited for and the
 scan continues on the next render. Text from the payload (session, folder, model names) has control
@@ -200,7 +248,8 @@ make fuzz               # each fuzz target for FUZZTIME (30s)
 ```
 
 Standard library only. Layout is `cmd/sill` for the CLI and `internal/` for one package per concern:
-`payload`, `config`, `render`, `gitinfo`, `transcript`, `term`, `install`, `atomicfile`. CI tests on
+`payload`, `config`, `render`, `gitinfo`, `transcript`, `cost`, `ledger`, `term`, `install`,
+`atomicfile`. `go run ./internal/cost/pricegen` refreshes the price table by hand. CI tests on
 Linux, macOS and Windows with the latest Go and with the minimum in `go.mod`, runs `govulncheck` and a
 short fuzzing pass. Actions are pinned to commit SHAs and kept current by Dependabot. Tags `v*` build
 release binaries for six targets with `-trimpath`, with checksums and provenance attestations.
