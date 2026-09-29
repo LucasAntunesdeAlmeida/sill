@@ -51,7 +51,7 @@ func ReadHead(cwd string) (State, bool) {
 	if os.Getenv("GIT_DIR") != "" || os.Getenv("GIT_WORK_TREE") != "" {
 		return State{}, false
 	}
-	gitDir, found, ok := findGitDir(cwd)
+	gitDir, _, found, ok := findGitDir(cwd)
 	if !ok {
 		return State{}, false
 	}
@@ -80,35 +80,58 @@ func ReadHead(cwd string) (State, bool) {
 }
 
 // findGitDir walks up from cwd to the first .git entry: a directory, or in a linked
-// worktree or submodule a file naming the directory. found is false when there is none up
-// to the root; ok is false when a .git entry exists but cannot be read.
-func findGitDir(cwd string) (dir string, found, ok bool) {
+// worktree or submodule a file naming the directory. top is the folder holding that entry.
+// found is false when there is none up to the root; ok is false when a .git entry exists
+// but cannot be read.
+func findGitDir(cwd string) (dir, top string, found, ok bool) {
 	for d := filepath.Clean(cwd); ; {
 		dotGit := filepath.Join(d, ".git")
 		fi, err := os.Stat(dotGit)
 		if err == nil {
 			if fi.IsDir() {
-				return dotGit, true, true
+				return dotGit, d, true, true
 			}
 			data, err := os.ReadFile(dotGit)
 			if err != nil {
-				return "", true, false
+				return "", d, true, false
 			}
 			target, isLink := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir: ")
 			if !isLink || target == "" {
-				return "", true, false
+				return "", d, true, false
 			}
 			if !filepath.IsAbs(target) {
 				target = filepath.Join(d, target)
 			}
-			return target, true, true
+			return target, d, true, true
 		}
 		parent := filepath.Dir(d)
 		if parent == d {
-			return "", false, true
+			return "", "", false, true
 		}
 		d = parent
 	}
+}
+
+// Root is the folder of the repository around cwd, the same for every linked worktree of
+// it: a worktree's git directory names the main one in its commondir file. A submodule is
+// its own repository. Outside any repository, or when it cannot be read, Root is cwd.
+func Root(cwd string) string {
+	gitDir, top, found, ok := findGitDir(cwd)
+	if !found || !ok {
+		return filepath.Clean(cwd)
+	}
+	data, err := os.ReadFile(filepath.Join(gitDir, "commondir"))
+	if err != nil {
+		return top
+	}
+	common := strings.TrimSpace(string(data))
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(gitDir, common)
+	}
+	if filepath.Base(common) != ".git" {
+		return top // a bare repository has no folder of its own
+	}
+	return filepath.Dir(filepath.Clean(common))
 }
 
 // isHash reports a full SHA-1 or SHA-256 object name.

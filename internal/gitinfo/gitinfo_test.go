@@ -203,6 +203,77 @@ func TestReadHead(t *testing.T) {
 	}
 }
 
+func TestRoot(t *testing.T) {
+	write := func(path, content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	root := t.TempDir()
+	main := filepath.Join(root, "main")
+	write(filepath.Join(main, ".git", "HEAD"), "ref: refs/heads/main\n")
+	write(filepath.Join(main, "src", "x"), "")
+	// A linked worktree elsewhere, the way git writes it.
+	write(filepath.Join(main, ".git", "worktrees", "wt", "commondir"), "../..\n")
+	write(filepath.Join(root, "wt", ".git"), "gitdir: "+filepath.Join(main, ".git", "worktrees", "wt")+"\n")
+	write(filepath.Join(root, "wt", "sub", "x"), "")
+	// A submodule: its git directory lives in the parent's, without a commondir.
+	write(filepath.Join(main, ".git", "modules", "lib", "HEAD"), "ref: refs/heads/main\n")
+	write(filepath.Join(main, "lib", ".git"), "gitdir: ../.git/modules/lib\n")
+	// Broken .git file.
+	write(filepath.Join(root, "broken", ".git"), "nonsense")
+	plain := filepath.Join(root, "plain")
+	write(filepath.Join(plain, "x"), "")
+
+	cases := map[string]string{
+		filepath.Join(main, "src"):       main,
+		main:                             main,
+		filepath.Join(root, "wt", "sub"): main,
+		filepath.Join(main, "lib"):       filepath.Join(main, "lib"),
+		filepath.Join(root, "broken"):    filepath.Join(root, "broken"),
+	}
+	for cwd, want := range cases {
+		if got := Root(cwd); got != want {
+			t.Errorf("Root(%s) = %s, want %s", cwd, got, want)
+		}
+	}
+	// Outside a repository the folder itself, unless the temp dir sits inside one.
+	if _, _, found, _ := findGitDir(plain); !found {
+		if got := Root(plain); got != plain {
+			t.Errorf("Root(plain) = %s", got)
+		}
+	}
+
+	if _, err := exec.LookPath("git"); err != nil {
+		return
+	}
+	repo := filepath.Join(t.TempDir(), "repo")
+	linked := filepath.Join(filepath.Dir(repo), "linked")
+	for _, args := range [][]string{
+		{"init", "-q", repo},
+		{"-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x"},
+		{"-C", repo, "worktree", "add", "-q", linked},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	if got := Root(linked); !sameDir(got, repo) {
+		t.Errorf("real worktree: Root = %s, want %s", got, repo)
+	}
+}
+
+// sameDir compares folders that may be spelled differently, such as a short Windows name.
+func sameDir(a, b string) bool {
+	fa, errA := os.Stat(a)
+	fb, errB := os.Stat(b)
+	return errA == nil && errB == nil && os.SameFile(fa, fb)
+}
+
 func TestIsHash(t *testing.T) {
 	for s, want := range map[string]bool{
 		"0123456789abcdef0123456789abcdef01234567":                         true,
