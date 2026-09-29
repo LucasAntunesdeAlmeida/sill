@@ -13,6 +13,8 @@ var (
 	looseToolUse = regexp.MustCompile(`"type"\s*:\s*"tool_use"`)
 	looseAgent   = regexp.MustCompile(`"name"\s*:\s*"(?:Agent|Task)"`)
 	looseCompact = regexp.MustCompile(`"subtype"\s*:\s*"compact_boundary"`)
+	looseUsage   = regexp.MustCompile(`"usage"\s*:\s*\{`)
+	looseModel   = regexp.MustCompile(`"model"\s*:\s*"claude-`)
 )
 
 // Report is what sill doctor shows about a transcript.
@@ -22,6 +24,8 @@ type Report struct {
 	Launches         int // records with an agent launch the scan recognised
 	LooseLaunches    int // records that look like one to the loose patterns
 	LooseCompactions int
+	Responses        int // records with usage the scan recognised
+	LooseResponses   int // records that look like one to the loose patterns
 }
 
 // Inspect scans a whole transcript the way a render does and counts, next to it, what the
@@ -48,6 +52,12 @@ func Inspect(path string) (Report, error) {
 		if looseCompact.Match(line) {
 			rep.LooseCompactions++
 		}
+		if _, ok := parseResponse(line); ok {
+			rep.Responses++
+		}
+		if looseUsage.Match(line) && looseModel.Match(line) {
+			rep.LooseResponses++
+		}
 		return true
 	})
 	rep.Activity = s.activity()
@@ -62,6 +72,9 @@ func (r Report) Drift() []string {
 	}
 	if r.LooseCompactions > r.Activity.Compactions {
 		out = append(out, fmt.Sprintf("%d of %d compactions not recognised", r.LooseCompactions-r.Activity.Compactions, r.LooseCompactions))
+	}
+	if r.LooseResponses > r.Responses {
+		out = append(out, fmt.Sprintf("%d of %d responses not recognised", r.LooseResponses-r.Responses, r.LooseResponses))
 	}
 	if r.Records > 0 && r.Activity.Start.IsZero() {
 		out = append(out, "no record has a timestamp sill can read")

@@ -13,11 +13,12 @@ import (
 	"time"
 
 	"github.com/LucasAntunesdeAlmeida/sill/internal/atomicfile"
+	"github.com/LucasAntunesdeAlmeida/sill/internal/cost"
 )
 
 // cacheVersion changes whenever what a scan counts changes, so a newer sill never trusts
 // counts an older one saved.
-const cacheVersion = 1
+const cacheVersion = 2
 
 // headBytes of the transcript are fingerprinted to notice it was replaced or rewritten.
 const headBytes = 4096
@@ -25,15 +26,37 @@ const headBytes = 4096
 // cacheMaxAge is how long the state of a session nobody renders any more is kept.
 const cacheMaxAge = 30 * 24 * time.Hour
 
-// cacheState is where a scan stopped and what it had counted by then.
+// filePos is how far a file was read, with a fingerprint of its beginning to notice it
+// was replaced or rewritten since.
+type filePos struct {
+	Offset   int64  `json:"offset"`    // bytes read, through the last complete line
+	HeadLen  int    `json:"head_len"`  // bytes the fingerprint covers
+	HeadHash string `json:"head_hash"` // sha256 of those bytes
+}
+
+// cacheState is where a scan stopped and what it had counted by then. Subagents run in
+// files of their own next to the transcript; their positions and totals live here too, so
+// a session keeps one state file however many agents it starts.
 type cacheState struct {
-	Version     int       `json:"version"`
-	Offset      int64     `json:"offset"`    // bytes read, through the last complete line
-	HeadLen     int       `json:"head_len"`  // bytes the fingerprint covers
-	HeadHash    string    `json:"head_hash"` // sha256 of those bytes
-	Compactions int       `json:"compactions"`
-	Start       time.Time `json:"start"`
-	Open        []string  `json:"open,omitempty"` // agents started, not yet finished
+	Version int    `json:"version"`
+	Prices  string `json:"prices"` // cost.TableVersion the dollars were computed with
+	filePos
+	Compactions int                 `json:"compactions"`
+	Start       time.Time           `json:"start"`
+	Open        []string            `json:"open,omitempty"` // agents started, not yet finished
+	Cost        cost.Totals         `json:"cost,omitempty"`
+	Pending     *response           `json:"pending,omitempty"`
+	Last        time.Time           `json:"last"`
+	Cwd         string              `json:"cwd,omitempty"`
+	Subagents   map[string]subState `json:"subagents,omitempty"` // by file name
+}
+
+// subState is how far a subagent's file was read and what its responses cost.
+type subState struct {
+	filePos
+	Cost    cost.Totals `json:"cost,omitempty"`
+	Pending *response   `json:"pending,omitempty"`
+	Last    time.Time   `json:"last"`
 }
 
 // ScanCached is Scan picking up where the previous render stopped: the scan state of each
@@ -41,6 +64,8 @@ type cacheState struct {
 // transcript that shrank or whose beginning changed is scanned again from the start. When
 // ctx ends mid-scan, what was read is saved and counted and the next render goes on from
 // there. An empty cacheDir scans the whole file every time.
+//
+// The subagents the session started are read the same way, for their cost only.
 func ScanCached(ctx context.Context, path, cacheDir string) Activity {
 	if path == "" {
 		return Activity{}
@@ -57,14 +82,63 @@ func ScanCached(ctx context.Context, path, cacheDir string) Activity {
 		stateFile = filepath.Join(cacheDir, cacheName(path))
 		st = loadState(stateFile)
 	}
+	if st.Version != cacheVersion || st.Prices != cost.TableVersion {
+		st = cacheState{}
+	}
 	if !st.fits(f) {
-		st = cacheState{Version: cacheVersion}
+		st = cacheState{Subagents: st.Subagents}
 	}
-	if _, err := f.Seek(st.Offset, io.SeekStart); err != nil {
-		return Activity{}
-	}
+	st.Version, st.Prices = cacheVersion, cost.TableVersion
 
 	s := st.scanner()
+	consumed := scanFrom(ctx, f, st.Offset, s)
+	changed := consumed > 0
+	if changed {
+		st.Offset += consumed
+		st.record(s)
+		st.fingerprint(f)
+	}
+	act := s.activity()
+
+	for name, file := range subagentFiles(path) {
+		if ctx.Err() != nil {
+			break
+		}
+		sub, ok := st.Subagents[name]
+		if n, scanned := scanSubagent(ctx, file, &sub); scanned {
+			changed = changed || n > 0 || !ok
+			if st.Subagents == nil {
+				st.Subagents = map[string]subState{}
+			}
+			st.Subagents[name] = sub
+		}
+	}
+	// Every subagent seen so far counts, even one whose file is gone.
+	for _, sub := range st.Subagents {
+		sc := sub.scanner()
+		if t := sc.totals(); t != nil {
+			if act.Cost == nil {
+				act.Cost = cost.Totals{}
+			}
+			act.Cost.Merge(t)
+		}
+		if sub.Last.After(act.Last) {
+			act.Last = sub.Last
+		}
+	}
+
+	if stateFile != "" && changed {
+		saveState(cacheDir, stateFile, st)
+	}
+	return act
+}
+
+// scanFrom reads records from offset on into s until ctx ends, and returns the bytes of
+// complete lines read.
+func scanFrom(ctx context.Context, f *os.File, offset int64, s *scanner) int64 {
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return 0
+	}
 	n := 0
 	consumed, _ := readLines(f, false, func(line []byte) bool {
 		if n%64 == 0 && ctx.Err() != nil {
@@ -74,40 +148,90 @@ func ScanCached(ctx context.Context, path, cacheDir string) Activity {
 		s.record(line)
 		return true
 	})
-	if stateFile != "" && consumed > 0 {
-		st.Offset += consumed
-		st.record(s)
-		st.fingerprint(f)
-		saveState(cacheDir, stateFile, st)
-	}
-	return s.activity()
+	return consumed
 }
 
-// fits reports whether the saved state still describes f: same version, the file has not
-// shrunk below the offset, and its beginning is unchanged.
-func (st cacheState) fits(f *os.File) bool {
-	if st.Version != cacheVersion || st.Offset <= 0 {
+// subagentFiles lists the transcripts of the subagents a session started, by file name.
+// They live in <session>/subagents/ next to <session>.jsonl.
+func subagentFiles(path string) map[string]string {
+	dir := filepath.Join(strings.TrimSuffix(path, ".jsonl"), "subagents")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	files := map[string]string{}
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".jsonl") {
+			files[e.Name()] = filepath.Join(dir, e.Name())
+		}
+	}
+	return files
+}
+
+// scanSubagent reads what was appended to a subagent's file into sub, and returns the
+// bytes read and whether the file could be read at all.
+func scanSubagent(ctx context.Context, path string, sub *subState) (int64, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, false
+	}
+	defer f.Close()
+	if !sub.filePos.fits(f) {
+		*sub = subState{}
+	}
+	s := sub.scanner()
+	n := scanFrom(ctx, f, sub.Offset, s)
+	if n > 0 {
+		sub.Offset += n
+		sub.Cost, sub.Pending, sub.Last = s.cost, pendingPtr(s.pending), s.last
+		sub.fingerprint(f)
+	}
+	return n, true
+}
+
+func (sub subState) scanner() *scanner {
+	s := &scanner{cost: sub.Cost, last: sub.Last}
+	if sub.Pending != nil {
+		s.pending = *sub.Pending
+	}
+	return s
+}
+
+func pendingPtr(r response) *response {
+	if r.ID == "" {
+		return nil
+	}
+	return &r
+}
+
+// fits reports whether the saved position still describes f: the file has not shrunk
+// below the offset and its beginning is unchanged.
+func (p filePos) fits(f *os.File) bool {
+	if p.Offset <= 0 {
 		return false
 	}
 	fi, err := f.Stat()
-	if err != nil || fi.Size() < st.Offset {
+	if err != nil || fi.Size() < p.Offset {
 		return false
 	}
-	head, err := readHead(f, st.HeadLen)
-	return err == nil && len(head) == st.HeadLen && hashHex(head) == st.HeadHash
+	head, err := readHead(f, p.HeadLen)
+	return err == nil && len(head) == p.HeadLen && hashHex(head) == p.HeadHash
 }
 
-func (st *cacheState) fingerprint(f *os.File) {
+func (p *filePos) fingerprint(f *os.File) {
 	head, err := readHead(f, headBytes)
 	if err != nil {
-		st.HeadLen, st.HeadHash = 0, ""
+		p.HeadLen, p.HeadHash = 0, ""
 		return
 	}
-	st.HeadLen, st.HeadHash = len(head), hashHex(head)
+	p.HeadLen, p.HeadHash = len(head), hashHex(head)
 }
 
 func (st cacheState) scanner() *scanner {
-	s := &scanner{compactions: st.Compactions, start: st.Start}
+	s := &scanner{compactions: st.Compactions, start: st.Start, cost: st.Cost, last: st.Last, cwd: st.Cwd}
+	if st.Pending != nil {
+		s.pending = *st.Pending
+	}
 	for _, id := range st.Open {
 		if s.open == nil {
 			s.open = map[string]bool{}
@@ -119,6 +243,7 @@ func (st cacheState) scanner() *scanner {
 
 func (st *cacheState) record(s *scanner) {
 	st.Compactions, st.Start, st.Open = s.compactions, s.start, nil
+	st.Cost, st.Pending, st.Last, st.Cwd = s.cost, pendingPtr(s.pending), s.last, s.cwd
 	for id := range s.open {
 		st.Open = append(st.Open, id)
 	}

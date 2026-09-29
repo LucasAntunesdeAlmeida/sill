@@ -31,13 +31,13 @@ func TestScanFile(t *testing.T) {
 	if act := Scan(filepath.Join("testdata", "session.jsonl")); act.Compactions != 2 || act.Agents != 2 || !act.Start.Equal(sessionStart) {
 		t.Errorf("file scan = %+v", act)
 	}
-	if act := Scan(""); act != (Activity{}) {
+	if act := Scan(""); !act.Empty() {
 		t.Errorf("no path = %+v", act)
 	}
-	if act := Scan(filepath.Join(t.TempDir(), "missing.jsonl")); act != (Activity{}) {
+	if act := Scan(filepath.Join(t.TempDir(), "missing.jsonl")); !act.Empty() {
 		t.Errorf("missing file = %+v", act)
 	}
-	if act := ScanReader(strings.NewReader("")); act != (Activity{}) {
+	if act := ScanReader(strings.NewReader("")); !act.Empty() {
 		t.Errorf("empty = %+v", act)
 	}
 }

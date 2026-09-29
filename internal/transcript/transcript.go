@@ -8,13 +8,24 @@ import (
 	"os"
 	"regexp"
 	"time"
+
+	"github.com/LucasAntunesdeAlmeida/sill/internal/cost"
 )
 
 // Activity is what the line learns from the transcript.
 type Activity struct {
-	Agents      int       // background agents started but not yet reported finished
-	Compactions int       // compact boundaries written so far
-	Start       time.Time // timestamp of the first record, zero when none has one
+	Agents      int         // background agents started but not yet reported finished
+	Compactions int         // compact boundaries written so far
+	Start       time.Time   // timestamp of the first record, zero when none has one
+	Last        time.Time   // timestamp of the latest response
+	Cost        cost.Totals // tokens and dollars of every response, subagents included
+	Cwd         string      // working directory of the latest response
+}
+
+// Empty reports whether the transcript said nothing at all.
+func (a Activity) Empty() bool {
+	return a.Agents == 0 && a.Compactions == 0 && a.Start.IsZero() && a.Last.IsZero() &&
+		len(a.Cost) == 0 && a.Cwd == ""
 }
 
 var (
@@ -100,12 +111,28 @@ type scanner struct {
 	compactions int
 	start       time.Time
 	open        map[string]bool // agent tool uses started and not yet reported finished
+	cost        cost.Totals     // responses that are complete
+	pending     response        // the response whose records are being written
+	last        time.Time
+	cwd         string
 }
 
 func (s *scanner) record(line []byte) {
 	if s.start.IsZero() {
 		if t, ok := timestamp(line); ok {
 			s.start = t
+		}
+	}
+	if r, ok := parseResponse(line); ok {
+		if r.ID != s.pending.ID {
+			s.commit()
+		}
+		s.pending = r
+		if r.At.After(s.last) {
+			s.last = r.At
+		}
+		if cwd := lastString(line, cwdMarker); cwd != "" {
+			s.cwd = cwd
 		}
 	}
 	if bytes.Contains(line, compactMarker) {
@@ -143,8 +170,37 @@ func (s *scanner) record(line []byte) {
 	}
 }
 
+// commit adds the pending response to the totals.
+func (s *scanner) commit() {
+	if s.pending.ID == "" {
+		return
+	}
+	if s.cost == nil {
+		s.cost = cost.Totals{}
+	}
+	s.cost.Add(s.pending.Model, s.pending.Fast, s.pending.At, s.pending.Tokens)
+	s.pending = response{}
+}
+
+// totals is the complete responses plus the pending one, without committing it: its
+// records may not all be written yet.
+func (s *scanner) totals() cost.Totals {
+	t := cost.Totals{}
+	t.Merge(s.cost)
+	if p := s.pending; p.ID != "" {
+		t.Add(p.Model, p.Fast, p.At, p.Tokens)
+	}
+	if len(t) == 0 {
+		return nil
+	}
+	return t
+}
+
 func (s *scanner) activity() Activity {
-	return Activity{Agents: len(s.open), Compactions: s.compactions, Start: s.start}
+	return Activity{
+		Agents: len(s.open), Compactions: s.compactions, Start: s.start,
+		Last: s.last, Cost: s.totals(), Cwd: s.cwd,
+	}
 }
 
 // readLines calls fn with every line, without its newline, until fn returns false to say

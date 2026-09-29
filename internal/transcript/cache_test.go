@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"github.com/LucasAntunesdeAlmeida/sill/internal/cost"
 )
 
 func sessionData(t testing.TB) []byte {
@@ -21,10 +24,25 @@ func sessionData(t testing.TB) []byte {
 	return data
 }
 
-// same compares activities; a start time read back from the cache is the same instant in
-// a different *time.Location, so == would not do.
+// same compares activities; a time read back from the cache is the same instant in a
+// different *time.Location, so == would not do.
 func same(a, b Activity) bool {
-	return a.Agents == b.Agents && a.Compactions == b.Compactions && a.Start.Equal(b.Start)
+	return a.Agents == b.Agents && a.Compactions == b.Compactions && a.Start.Equal(b.Start) &&
+		a.Last.Equal(b.Last) && a.Cwd == b.Cwd && sameCost(a.Cost, b.Cost)
+}
+
+// sameCost compares totals, dollars within float rounding.
+func sameCost(a, b cost.Totals) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, u := range a {
+		v, ok := b[k]
+		if !ok || u.Tokens != v.Tokens || u.Unpriced != v.Unpriced || math.Abs(u.USD-v.USD) > 1e-9 {
+			return false
+		}
+	}
+	return true
 }
 
 func appendFile(t testing.TB, path string, data []byte) {
@@ -121,10 +139,10 @@ func TestScanCachedResumesAfterDeadline(t *testing.T) {
 }
 
 func TestScanCachedMissing(t *testing.T) {
-	if got := ScanCached(context.Background(), "", t.TempDir()); got != (Activity{}) {
+	if got := ScanCached(context.Background(), "", t.TempDir()); !got.Empty() {
 		t.Errorf("no path = %+v", got)
 	}
-	if got := ScanCached(context.Background(), filepath.Join(t.TempDir(), "gone.jsonl"), t.TempDir()); got != (Activity{}) {
+	if got := ScanCached(context.Background(), filepath.Join(t.TempDir(), "gone.jsonl"), t.TempDir()); !got.Empty() {
 		t.Errorf("missing file = %+v", got)
 	}
 }
@@ -156,6 +174,7 @@ func TestPruneStates(t *testing.T) {
 // one full scan.
 func FuzzScanSplit(f *testing.F) {
 	f.Add(sessionData(f), 500, 1200)
+	f.Add(usageData(f), 700, 2100)
 	f.Add([]byte("{\"subtype\":\"compact_boundary\"}\n\n{}\n"), 3, 3)
 	f.Fuzz(func(t *testing.T, data []byte, a, b int) {
 		if !utf8.Valid(data) {
