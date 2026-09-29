@@ -44,13 +44,14 @@ const usage = `sill: a status line for Claude Code.
 
 Usage:
   sill                    render (Claude Code pipes its JSON on stdin)
-  sill install            point settings.json at this binary
-  sill uninstall          remove the statusLine entry again
+  sill install            point settings.json at this binary, with a cost hook
+  sill uninstall          remove the statusLine entry and the hook again
   sill settings           list options and current values
   sill set <key> <value>  change options, e.g. sill set layout full cache on
   sill unset <key>...     back to the default, e.g. sill unset cache width
   sill demo               render a sample payload with the current settings
   sill doctor             check the setup and what a render sees
+  sill hook               record session costs (Claude Code runs it as a session ends)
   sill version            print the version
 
 Inside Claude Code, run any of these without a model turn:
@@ -98,6 +99,9 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return demo(stdout)
 	case "doctor":
 		return doctor(stdout)
+	case "hook":
+		hook(stdin)
+		return nil
 	case "version", "-v", "--version":
 		_, err := fmt.Fprintln(stdout, "sill", versionString())
 		return err
@@ -158,7 +162,12 @@ func renderFailed(err error, stdout io.Writer) {
 		msg = msg[:77] + "..."
 	}
 	fmt.Fprintln(stdout, "sill: "+render.Clean(msg))
+	saveLastError(err)
+}
 
+// saveLastError puts the details of a failure, payload and stack included, into the cache
+// directory, where sill doctor finds them.
+func saveLastError(err error) {
 	dir := cacheDir()
 	if dir == "" || os.MkdirAll(dir, 0o755) != nil {
 		return

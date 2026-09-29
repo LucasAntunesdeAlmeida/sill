@@ -309,7 +309,7 @@ func TestRunAndUninstall(t *testing.T) {
 		t.Fatal(err)
 	}
 	log := out.String()
-	for _, want := range []string{"Updated statusLine", "statusline-command.sh is no longer used", "Tip: add", "Restart Claude Code"} {
+	for _, want := range []string{"Updated statusLine", "Added a SessionEnd hook", "statusline-command.sh is no longer used", "Tip: add", "Restart Claude Code"} {
 		if !strings.Contains(log, want) {
 			t.Errorf("missing %q in:\n%s", want, log)
 		}
@@ -328,6 +328,9 @@ func TestRunAndUninstall(t *testing.T) {
 	cmd := doc["statusLine"].(map[string]any)["command"].(string)
 	if !strings.HasPrefix(cmd, `"`) || strings.Contains(cmd, `\`) {
 		t.Errorf("command should be quoted with forward slashes: %q", cmd)
+	}
+	if hooks, err := HookCommands(dir); err != nil || len(hooks) != 1 || hooks[0] != cmd+" hook" {
+		t.Errorf("hooks = %q, %v; want the same binary with hook", hooks, err)
 	}
 	backup, err := os.ReadFile(filepath.Join(dir, BackupName))
 	if err != nil || string(backup) != original {
@@ -352,16 +355,120 @@ func TestRunAndUninstall(t *testing.T) {
 	if err := Uninstall(dir, &out); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "Removed statusLine") || !strings.Contains(out.String(), "sill.json") {
-		t.Errorf("uninstall:\n%s", out.String())
+	for _, want := range []string{"Removed statusLine", "Removed the SessionEnd hook", "sill.json"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("uninstall lacks %q:\n%s", want, out.String())
+		}
 	}
 	data, _ = os.ReadFile(filepath.Join(dir, "settings.json"))
-	if strings.Contains(string(data), "statusLine") || !strings.Contains(string(data), `"model"`) {
+	if strings.Contains(string(data), "statusLine") || strings.Contains(string(data), "hooks") || !strings.Contains(string(data), `"model"`) {
 		t.Errorf("after uninstall:\n%s", data)
 	}
 	out.Reset()
 	if err := Uninstall(dir, &out); err != nil || !strings.Contains(out.String(), "nothing to do") {
 		t.Errorf("second uninstall: err=%v out=%q", err, out.String())
+	}
+}
+
+func TestIsSillHook(t *testing.T) {
+	for cmd, want := range map[string]bool{
+		`"C:/Users/me/go/bin/sill.exe" hook`: true,
+		`/usr/local/bin/sill hook`:           true,
+		`sill hook `:                         true,
+		`"/opt/sill-linux-amd64" hook`:       true,
+		`"C:/Users/me/go/bin/sill.exe"`:      false,
+		`sill hooks`:                         false,
+		`other hook`:                         false,
+		`rtk hook claude`:                    false,
+	} {
+		if got := IsSillHook(cmd); got != want {
+			t.Errorf("IsSillHook(%q) = %v, want %v", cmd, got, want)
+		}
+	}
+}
+
+const withHooks = `{
+  "model": "x",
+  "hooks": {
+    "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "rtk hook claude"}]}],
+    "SessionEnd": [
+      {"hooks": [{"type": "command", "command": "notify-send bye"}, {"type": "command", "command": "\"/old/sill\" hook"}]}
+    ],
+    "Stop": [{"hooks": [{"type": "command", "command": "say done"}]}]
+  },
+  "tui": "fullscreen"
+}`
+
+func TestSetHook(t *testing.T) {
+	const cmd = `"/new/sill" hook`
+	out, changed, err := SetHook([]byte(withHooks), cmd)
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	text := string(out)
+	// Other hooks and the order of keys and events stay; the old sill hook is replaced.
+	for _, want := range []string{"rtk hook claude", "notify-send bye", "say done", "/new/sill"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "/old/sill") {
+		t.Errorf("old sill hook kept:\n%s", text)
+	}
+	order := []string{`"model"`, `"hooks"`, `"PreToolUse"`, `"SessionEnd"`, `"Stop"`, `"tui"`}
+	for i := 1; i < len(order); i++ {
+		if strings.Index(text, order[i-1]) > strings.Index(text, order[i]) {
+			t.Errorf("%s moved after %s:\n%s", order[i-1], order[i], text)
+		}
+	}
+	var doc struct {
+		Hooks map[string][]struct {
+			Hooks []struct{ Type, Command string }
+		}
+	}
+	if err := json.Unmarshal(out, &doc); err != nil {
+		t.Fatal(err)
+	}
+	groups := doc.Hooks[HookEvent]
+	if len(groups) != 2 || len(groups[0].Hooks) != 1 || groups[1].Hooks[0].Command != cmd || groups[1].Hooks[0].Type != "command" {
+		t.Errorf("SessionEnd = %+v", groups)
+	}
+
+	again, changed, err := SetHook(out, cmd)
+	if err != nil || changed || string(again) != text {
+		t.Errorf("second run changed=%v err=%v", changed, err)
+	}
+
+	fresh, changed, err := SetHook([]byte(`{"model":"x"}`), cmd)
+	want := "{\n  \"model\": \"x\",\n  \"hooks\": {\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"\\\"/new/sill\\\" hook\",\n            \"type\": \"command\"\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+	if err != nil || !changed || string(fresh) != want {
+		t.Errorf("fresh:\n%s\nwant:\n%s", fresh, want)
+	}
+	if _, _, err := SetHook([]byte(`{"hooks": []}`), cmd); err == nil {
+		t.Error("hooks that is not an object accepted")
+	}
+	if _, _, err := SetHook([]byte(`{"hooks": {"SessionEnd": {}}}`), cmd); err == nil {
+		t.Error("SessionEnd that is not a list accepted")
+	}
+}
+
+func TestRemoveHook(t *testing.T) {
+	out, changed, err := RemoveHook([]byte(withHooks))
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	if strings.Contains(string(out), "sill") || !strings.Contains(string(out), "notify-send bye") {
+		t.Errorf("after remove:\n%s", out)
+	}
+	// Removing the only hook drops the event and then the empty hooks setting.
+	only, _, _ := SetHook([]byte(`{"model":"x"}`), `"/new/sill" hook`)
+	out, changed, err = RemoveHook(only)
+	if err != nil || !changed || string(out) != "{\n  \"model\": \"x\"\n}\n" {
+		t.Errorf("remove the only hook: %v %v\n%s", changed, err, out)
+	}
+	same, changed, err := RemoveHook(out)
+	if err != nil || changed || string(same) != string(out) {
+		t.Errorf("nothing to remove: changed=%v err=%v", changed, err)
 	}
 }
 
