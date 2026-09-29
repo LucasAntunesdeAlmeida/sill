@@ -2,7 +2,12 @@ package transcript
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
+	"hash/fnv"
+	"math"
+	"slices"
 	"strconv"
 	"time"
 
@@ -86,6 +91,69 @@ func parseResponse(line []byte) (response, bool) {
 		r.At, _ = timestamp(line[i:])
 	}
 	return r, true
+}
+
+// seenSet holds the responses a session has counted, by a 64-bit hash of their id, with
+// the output tokens counted for each. A forked subagent's file starts with a copy of its
+// parent's history, and the copy of the response that started the fork can be taken
+// while that response is still being written. Counting each response at its largest
+// output, whichever file shows it first, makes the total independent of the order the
+// files are read in. 12 bytes a response in the scan state.
+type seenSet map[uint64]uint32
+
+func idHash(id string) uint64 {
+	h := fnv.New64a()
+	h.Write([]byte(id))
+	return h.Sum64()
+}
+
+// peek returns what counting r would add: all of it when it is new, the extra output when
+// an earlier copy had less, nothing otherwise.
+func (s seenSet) peek(r response) (cost.Tokens, bool) {
+	prev, ok := s[idHash(r.ID)]
+	switch {
+	case !ok:
+		return r.Tokens, true
+	case r.Tokens.Output > int64(prev):
+		return cost.Tokens{Output: r.Tokens.Output - int64(prev)}, true
+	}
+	return cost.Tokens{}, false
+}
+
+// add counts r and returns what it added, as peek does.
+func (s seenSet) add(r response) (cost.Tokens, bool) {
+	tok, ok := s.peek(r)
+	if ok {
+		s[idHash(r.ID)] = uint32(min(r.Tokens.Output, math.MaxUint32))
+	}
+	return tok, ok
+}
+
+// encode packs the set for the state file.
+func (s seenSet) encode() string {
+	keys := make([]uint64, 0, len(s))
+	for h := range s {
+		keys = append(keys, h)
+	}
+	slices.Sort(keys)
+	buf := make([]byte, 12*len(keys))
+	for i, h := range keys {
+		binary.LittleEndian.PutUint64(buf[12*i:], h)
+		binary.LittleEndian.PutUint32(buf[12*i+8:], s[h])
+	}
+	return base64.RawStdEncoding.EncodeToString(buf)
+}
+
+func decodeSeen(text string) seenSet {
+	s := seenSet{}
+	buf, err := base64.RawStdEncoding.DecodeString(text)
+	if err != nil {
+		return s
+	}
+	for i := 0; i+12 <= len(buf); i += 12 {
+		s[binary.LittleEndian.Uint64(buf[i:])] = binary.LittleEndian.Uint32(buf[i+8:])
+	}
+	return s
 }
 
 // number is the non-negative integer after the first key in b, or 0.

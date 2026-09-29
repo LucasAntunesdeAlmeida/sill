@@ -49,6 +49,7 @@ type cacheState struct {
 	Last        time.Time           `json:"last"`
 	Cwd         string              `json:"cwd,omitempty"`
 	Subagents   map[string]subState `json:"subagents,omitempty"` // by file name
+	Seen        string              `json:"seen,omitempty"`      // seenSet.encode of every file
 }
 
 // subState is how far a subagent's file was read and what its responses cost.
@@ -82,15 +83,16 @@ func ScanCached(ctx context.Context, path, cacheDir string) Activity {
 		stateFile = filepath.Join(cacheDir, cacheName(path))
 		st = loadState(stateFile)
 	}
-	if st.Version != cacheVersion || st.Prices != cost.TableVersion {
+	subs := subagentFiles(path)
+	// The responses counted are shared by every file of the session, so one file that was
+	// replaced means reading them all again.
+	if st.Version != cacheVersion || st.Prices != cost.TableVersion || !st.fits(f) || !st.subagentsFit(subs) {
 		st = cacheState{}
 	}
-	if !st.fits(f) {
-		st = cacheState{Subagents: st.Subagents}
-	}
 	st.Version, st.Prices = cacheVersion, cost.TableVersion
+	seen := decodeSeen(st.Seen)
 
-	s := st.scanner()
+	s := st.scanner(seen)
 	consumed := scanFrom(ctx, f, st.Offset, s)
 	changed := consumed > 0
 	if changed {
@@ -100,13 +102,18 @@ func ScanCached(ctx context.Context, path, cacheDir string) Activity {
 	}
 	act := s.activity()
 
-	for name, file := range subagentFiles(path) {
+	names := make([]string, 0, len(subs))
+	for name := range subs {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, name := range names {
 		if ctx.Err() != nil {
 			break
 		}
-		sub, ok := st.Subagents[name]
-		if n, scanned := scanSubagent(ctx, file, &sub); scanned {
-			changed = changed || n > 0 || !ok
+		sub, known := st.Subagents[name]
+		if n, scanned := scanSubagent(ctx, subs[name], &sub, seen); scanned && (n > 0 || !known) {
+			changed = true
 			if st.Subagents == nil {
 				st.Subagents = map[string]subState{}
 			}
@@ -115,7 +122,7 @@ func ScanCached(ctx context.Context, path, cacheDir string) Activity {
 	}
 	// Every subagent seen so far counts, even one whose file is gone.
 	for _, sub := range st.Subagents {
-		sc := sub.scanner()
+		sc := sub.scanner(seen)
 		if t := sc.totals(); t != nil {
 			if act.Cost == nil {
 				act.Cost = cost.Totals{}
@@ -128,9 +135,31 @@ func ScanCached(ctx context.Context, path, cacheDir string) Activity {
 	}
 
 	if stateFile != "" && changed {
+		st.Seen = seen.encode()
 		saveState(cacheDir, stateFile, st)
 	}
 	return act
+}
+
+// subagentsFit reports whether every subagent file read before still matches its saved
+// position. A file that is gone does not count against it: its responses stay counted.
+func (st cacheState) subagentsFit(files map[string]string) bool {
+	for name, sub := range st.Subagents {
+		path, ok := files[name]
+		if !ok {
+			continue
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			continue
+		}
+		fits := sub.Offset == 0 || sub.filePos.fits(f)
+		f.Close()
+		if !fits {
+			return false
+		}
+	}
+	return true
 }
 
 // scanFrom reads records from offset on into s until ctx ends, and returns the bytes of
@@ -170,16 +199,13 @@ func subagentFiles(path string) map[string]string {
 
 // scanSubagent reads what was appended to a subagent's file into sub, and returns the
 // bytes read and whether the file could be read at all.
-func scanSubagent(ctx context.Context, path string, sub *subState) (int64, bool) {
+func scanSubagent(ctx context.Context, path string, sub *subState, seen seenSet) (int64, bool) {
 	f, err := os.Open(path)
 	if err != nil {
 		return 0, false
 	}
 	defer f.Close()
-	if !sub.filePos.fits(f) {
-		*sub = subState{}
-	}
-	s := sub.scanner()
+	s := sub.scanner(seen)
 	n := scanFrom(ctx, f, sub.Offset, s)
 	if n > 0 {
 		sub.Offset += n
@@ -189,8 +215,8 @@ func scanSubagent(ctx context.Context, path string, sub *subState) (int64, bool)
 	return n, true
 }
 
-func (sub subState) scanner() *scanner {
-	s := &scanner{cost: sub.Cost, last: sub.Last}
+func (sub subState) scanner(seen seenSet) *scanner {
+	s := &scanner{cost: sub.Cost, last: sub.Last, seen: seen}
 	if sub.Pending != nil {
 		s.pending = *sub.Pending
 	}
@@ -227,8 +253,8 @@ func (p *filePos) fingerprint(f *os.File) {
 	p.HeadLen, p.HeadHash = len(head), hashHex(head)
 }
 
-func (st cacheState) scanner() *scanner {
-	s := &scanner{compactions: st.Compactions, start: st.Start, cost: st.Cost, last: st.Last, cwd: st.Cwd}
+func (st cacheState) scanner(seen seenSet) *scanner {
+	s := &scanner{compactions: st.Compactions, start: st.Start, cost: st.Cost, last: st.Last, cwd: st.Cwd, seen: seen}
 	if st.Pending != nil {
 		s.pending = *st.Pending
 	}

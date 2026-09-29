@@ -2,6 +2,7 @@ package transcript
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,7 +46,16 @@ func mainCost() cost.Totals {
 	return want
 }
 
+// subagentCost is what the subagents in testdata/usage/subagents/ add: a1's response, and
+// the one response of f1 that is its own. f1 is a fork, so its file starts with copies of
+// msg_1 and msg_s1, which were counted already.
 func subagentCost() cost.Totals {
+	want := a1Cost()
+	want.Add("claude-sonnet-5-5", false, at("2026-09-25T10:07:00Z"), cost.Tokens{Input: 3, Output: 7, CacheRead: 800})
+	return want
+}
+
+func a1Cost() cost.Totals {
 	want := cost.Totals{}
 	want.Add("claude-sonnet-5-5", false, at("2026-09-25T10:05:00Z"), cost.Tokens{Input: 4, Output: 20, CacheRead: 500})
 	return want
@@ -74,12 +84,103 @@ func TestScanCountsEachResponseOnce(t *testing.T) {
 func TestScanCachedIncludesSubagents(t *testing.T) {
 	want := mainCost()
 	want.Merge(subagentCost())
-	act := ScanCached(context.Background(), filepath.Join("testdata", "usage.jsonl"), t.TempDir())
-	if !sameCost(act.Cost, want) {
-		t.Errorf("cost = %+v\nwant  %+v", act.Cost, want)
+	cache := t.TempDir()
+	for _, run := range []string{"first", "cached"} {
+		act := ScanCached(context.Background(), filepath.Join("testdata", "usage.jsonl"), cache)
+		if !sameCost(act.Cost, want) {
+			t.Errorf("%s: cost = %+v\nwant  %+v", run, act.Cost, want)
+		}
+		if !act.Last.Equal(at("2026-09-25T10:07:00Z")) {
+			t.Errorf("%s: last = %v, want the fork's own response", run, act.Last)
+		}
 	}
-	if !act.Last.Equal(at("2026-09-25T10:05:00Z")) {
-		t.Errorf("last = %v, want the subagent's final response", act.Last)
+}
+
+// A subagent file rewritten from the start makes the whole session count again, so the
+// responses it shared with other files are neither lost nor doubled.
+func TestReplacedSubagentRescansTheSession(t *testing.T) {
+	dir, cache := t.TempDir(), t.TempDir()
+	path := filepath.Join(dir, "s.jsonl")
+	appendFile(t, path, usageData(t))
+	subDir := filepath.Join(dir, "s", "subagents")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fork, err := os.ReadFile(filepath.Join("testdata", "usage", "subagents", "agent-f1.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	forkPath := filepath.Join(subDir, "agent-f1.jsonl")
+	appendFile(t, forkPath, fork)
+	ScanCached(context.Background(), path, cache)
+
+	// Rewritten: the copy of msg_1 is gone and the fork's own response is different.
+	lines := strings.SplitAfter(string(fork), "\n")
+	rewritten := lines[0] + strings.Replace(lines[4], `"output_tokens":7`, `"output_tokens":9`, 1)
+	if err := os.WriteFile(forkPath, []byte(rewritten), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	want := mainCost()
+	want.Add("claude-sonnet-5-5", false, at("2026-09-25T10:07:00Z"), cost.Tokens{Input: 3, Output: 9, CacheRead: 800})
+	if got := ScanCached(context.Background(), path, cache); !sameCost(got.Cost, want) {
+		t.Errorf("after the rewrite = %+v\nwant %+v", got.Cost, want)
+	}
+}
+
+func TestSeenSet(t *testing.T) {
+	s := seenSet{}
+	resp := func(id string, out int64) response {
+		return response{ID: id, Tokens: cost.Tokens{Input: 5, CacheRead: 100, Output: out}}
+	}
+	for _, id := range []string{"msg_1", "msg_2", "msg_3"} {
+		if tok, ok := s.add(resp(id, 50)); !ok || tok != resp(id, 50).Tokens {
+			t.Errorf("%s: added %+v, %v", id, tok, ok)
+		}
+	}
+	if _, ok := s.add(resp("msg_2", 50)); ok {
+		t.Error("msg_2 counted twice")
+	}
+	if _, ok := s.add(resp("msg_2", 40)); ok {
+		t.Error("a smaller copy of msg_2 counted")
+	}
+	// A copy taken while the response was being written, then the final record.
+	if tok, ok := s.add(resp("msg_2", 60)); !ok || tok != (cost.Tokens{Output: 10}) {
+		t.Errorf("the rest of msg_2 = %+v, %v", tok, ok)
+	}
+	back := decodeSeen(s.encode())
+	if len(back) != 3 || back[idHash("msg_2")] != 60 || back[idHash("msg_1")] != 50 {
+		t.Errorf("round trip = %v", back)
+	}
+	if len(decodeSeen("not base64!")) != 0 || len(decodeSeen("")) != 0 {
+		t.Error("bad input should decode to an empty set")
+	}
+}
+
+// A fork can copy the response that started it before that response is complete. The
+// response counts at its final size whichever file is read first.
+func TestPartialCopyInAFork(t *testing.T) {
+	record := func(id string, out int) string {
+		return fmt.Sprintf(`{"message":{"model":"claude-opus-5-5","id":"%s","usage":{"input_tokens":1,"output_tokens":%d}},"timestamp":"2026-09-25T10:00:00Z"}`+"\n", id, out)
+	}
+	want := cost.Totals{}
+	want.Add("claude-opus-5-5", false, at("2026-09-25T10:00:00Z"), cost.Tokens{Input: 1, Output: 60})
+	want.Add("claude-opus-5-5", false, at("2026-09-25T10:00:00Z"), cost.Tokens{Input: 1, Output: 5})
+	want.Add("claude-opus-5-5", false, at("2026-09-25T10:00:00Z"), cost.Tokens{Input: 1, Output: 7})
+	// The parent's file is read before the fork's in one run and after it in the other.
+	for _, names := range [][2]string{{"agent-a.jsonl", "agent-b.jsonl"}, {"agent-b.jsonl", "agent-a.jsonl"}} {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "s.jsonl")
+		appendFile(t, path, []byte(`{"type":"user","message":{"content":"hi"}}`+"\n"))
+		subDir := filepath.Join(dir, "s", "subagents")
+		if err := os.MkdirAll(subDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		parent, fork := names[0], names[1]
+		appendFile(t, filepath.Join(subDir, parent), []byte(record("msg_p", 60)+record("msg_p2", 5)))
+		appendFile(t, filepath.Join(subDir, fork), []byte(record("msg_p", 20)+record("msg_f", 7)))
+		if got := ScanCached(context.Background(), path, t.TempDir()); !sameCost(got.Cost, want) {
+			t.Errorf("parent %s, fork %s: %+v\nwant %+v", parent, fork, got.Cost, want)
+		}
 	}
 }
 
@@ -109,7 +210,7 @@ func TestSubagentIncremental(t *testing.T) {
 
 	appendFile(t, subPath, []byte(lines[2]))
 	full := mainCost()
-	full.Merge(subagentCost())
+	full.Merge(a1Cost())
 	if got := ScanCached(context.Background(), path, cache); !sameCost(got.Cost, full) {
 		t.Errorf("after the final record = %+v", got.Cost)
 	}

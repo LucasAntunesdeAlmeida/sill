@@ -113,6 +113,7 @@ type scanner struct {
 	open        map[string]bool // agent tool uses started and not yet reported finished
 	cost        cost.Totals     // responses that are complete
 	pending     response        // the response whose records are being written
+	seen        seenSet         // responses counted, shared by every file of a session
 	last        time.Time
 	cwd         string
 }
@@ -170,15 +171,23 @@ func (s *scanner) record(line []byte) {
 	}
 }
 
-// commit adds the pending response to the totals.
+// commit adds the pending response to the totals, as far as another file of the session
+// has not counted it already: a forked subagent's transcript starts with a copy of its
+// parent's history.
 func (s *scanner) commit() {
-	if s.pending.ID == "" {
+	p := s.pending
+	if p.ID == "" {
 		return
 	}
-	if s.cost == nil {
-		s.cost = cost.Totals{}
+	if s.seen == nil {
+		s.seen = seenSet{}
 	}
-	s.cost.Add(s.pending.Model, s.pending.Fast, s.pending.At, s.pending.Tokens)
+	if tok, ok := s.seen.add(p); ok {
+		if s.cost == nil {
+			s.cost = cost.Totals{}
+		}
+		s.cost.Add(p.Model, p.Fast, p.At, tok)
+	}
 	s.pending = response{}
 }
 
@@ -188,7 +197,9 @@ func (s *scanner) totals() cost.Totals {
 	t := cost.Totals{}
 	t.Merge(s.cost)
 	if p := s.pending; p.ID != "" {
-		t.Add(p.Model, p.Fast, p.At, p.Tokens)
+		if tok, ok := s.seen.peek(p); ok {
+			t.Add(p.Model, p.Fast, p.At, tok)
+		}
 	}
 	if len(t) == 0 {
 		return nil
