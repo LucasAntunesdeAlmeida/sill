@@ -53,6 +53,7 @@ Usage:
   sill cost [folder]      what sessions cost, per repository or for one repository
   sill doctor             check the setup and what a render sees
   sill hook               record session costs (Claude Code runs it as a session ends)
+  sill completion <shell> print Tab completion for bash, zsh, fish or powershell
   sill version            print the version
 
 Inside Claude Code, run any of these without a model turn:
@@ -105,6 +106,10 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return nil
 	case "cost":
 		return costReport(args[1:], stdout)
+	case "completion":
+		return completion(args[1:], stdout)
+	case "__complete":
+		return complete(args[1:], stdout)
 	case "version", "-v", "--version":
 		_, err := fmt.Fprintln(stdout, "sill", versionString())
 		return err
