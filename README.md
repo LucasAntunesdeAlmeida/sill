@@ -129,6 +129,7 @@ sill demo               render a sample payload with the current settings
 sill cost [folder]      what sessions cost, per repository or for one repository
 sill doctor             check the setup and what a render sees
 sill hook               record session costs; Claude Code runs it as a session ends
+sill completion <shell> print Tab completion for bash, zsh, fish or powershell
 ```
 
 ```
@@ -168,6 +169,29 @@ Inside a Claude Code session, prefix the command with `!` to run it without a mo
 
 The line picks up the change on its next refresh. Settings live in `~/.claude/sill.json` and the file
 only contains what you changed, so `sill settings` is the place to see everything.
+
+### Tab completion
+
+`sill completion` prints a script that completes commands, option names and their values:
+`sill set la<Tab>` gives `layout`, and `sill set layout <Tab>` offers `compact custom full`. Load it
+from your shell's startup file:
+
+```
+# PowerShell, in $PROFILE
+sill completion powershell | Out-String | Invoke-Expression
+
+# bash, in ~/.bashrc
+eval "$(sill completion bash)"
+
+# zsh, in ~/.zshrc after compinit
+source <(sill completion zsh)
+
+# fish
+sill completion fish > ~/.config/fish/completions/sill.fish
+```
+
+The script asks the binary for the candidates, so it keeps up with new options without being
+generated again. It works in a terminal, not in the `!` prompt inside Claude Code.
 
 ## Costs
 

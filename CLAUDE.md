@@ -17,7 +17,7 @@ go run ./internal/cost/pricegen   # refresh internal/cost/prices.json from LiteL
 
 ## Layout
 
-- `cmd/sill` is the CLI: render from stdin, `install`, `uninstall`, `settings`, `set`, `unset`, `demo`, `doctor` (in `doctor.go`), `hook` and the sweep of unrecorded sessions (`hook.go`), `cost` (`cost.go`).
+- `cmd/sill` is the CLI: render from stdin, `install`, `uninstall`, `settings`, `set`, `unset`, `demo`, `doctor` (in `doctor.go`), `hook` and the sweep of unrecorded sessions (`hook.go`), `cost` (`cost.go`), `completion` and the hidden `__complete` the shell scripts call (`complete.go`).
 - `internal/payload` decodes Claude Code's stdin JSON. Schema: search the Claude Code binary for `Pre-calculated: % of context used`.
 - `internal/config` is the options table, the layout presets and the settings file `~/.claude/sill.json`. `Check` reports what `Parse` ignores.
 - `internal/render` builds the line, including width fitting in terminal columns. All formatting lives here.
