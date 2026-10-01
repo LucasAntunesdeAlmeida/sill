@@ -72,6 +72,7 @@ reserved for budgets.
 | `model` | on | `Fable 5.1` | payload |
 | `effort` | on | `high`, as set by `/effort` | payload |
 | `session` | on | the session name given with `/rename` | payload |
+| `style` | on | `style Learning`, the output style from `/output-style`, when it is not the default | payload |
 | `version` | off | `v2.1.282`, the Claude Code version | payload |
 
 ## Options
@@ -122,7 +123,7 @@ more than one line, the layout is treated like `full`: long path, token counts, 
 stdout is a pipe to Claude Code, so sill asks the console directly for its width, through the Windows
 console API or `/dev/tty`. When a line is too long it drops detail in a fixed order rather than wrap.
 First the path shortens to `~/.../sill`, then to `sill`; then limits lose their reset times; then
-whole segments go, in this order: `version`, `duration`, `session`, `compactions`, `agents`, `cache`,
+whole segments go, in this order: `version`, `duration`, `style`, `session`, `compactions`, `agents`, `cache`,
 `cost`, `effort`, `worktree`, `pr`, `repo`, `git`, `path`. The budgets and the model are the last to go.
 
 Width is measured in terminal columns, so Chinese, Japanese or Korean characters and emoji in a folder

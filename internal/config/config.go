@@ -58,6 +58,7 @@ var Options = []Option{
 	{"model", "on", Bool, nil, "model name"},
 	{"effort", "on", Bool, nil, "effort level from /effort"},
 	{"session", "on", Bool, nil, "session name from /rename"},
+	{"style", "on", Bool, nil, "output style, when it is not the default"},
 	{"version", "off", Bool, nil, "Claude Code version"},
 }
 
@@ -92,12 +93,12 @@ type Layout struct {
 // Presets are the built-in layouts.
 var Presets = map[string]Layout{
 	"compact": {Lines: []string{
-		"ctx limits cache cost agents compactions | repo path git worktree pr | model / effort / session duration version",
+		"ctx limits cache cost agents compactions | repo path git worktree pr | model / effort / session style duration version",
 	}},
 	"full": {Lines: []string{
 		"repo path git worktree pr",
 		"ctx limits cache cost",
-		"model / effort / session duration agents compactions version",
+		"model / effort / session style duration agents compactions version",
 	}, Wide: true},
 }
 

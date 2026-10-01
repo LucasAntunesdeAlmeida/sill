@@ -31,6 +31,9 @@ type Payload struct {
 	Effort struct {
 		Level string `json:"level"`
 	} `json:"effort"`
+	OutputStyle struct {
+		Name string `json:"name"`
+	} `json:"output_style"`
 	RateLimits struct {
 		FiveHour   *LimitWindow `json:"five_hour"`
 		SevenDay   *LimitWindow `json:"seven_day"`

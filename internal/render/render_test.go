@@ -37,6 +37,7 @@ func samplePayload(t testing.TB, base time.Time) *payload.Payload {
 		"context_window": {"used_percentage": 61.2, "total_input_tokens": 122400, "context_window_size": 200000},
 		"effort": {"level": "high"},
 		"session_name": "billing-fix",
+		"output_style": {"name": "default"},
 		"version": "2.1.282",
 		"rate_limits": {
 			"five_hour": {"used_percentage": 94, "resets_at": %d},
@@ -360,6 +361,44 @@ func TestRepoInLayouts(t *testing.T) {
 	st := sampleState(s, base)
 	if got, _, _ := strings.Cut(plain(Render(samplePayload(t, base), st)), "\n"); got != "acme/storefront  feature/billing MERGING  wt  #42 +" {
 		t.Errorf("full layout first line = %q", got)
+	}
+}
+
+func TestStyleSegment(t *testing.T) {
+	s := config.New()
+	st := State{Settings: s, Layout: s.Layout()}
+	for doc, want := range map[string]string{
+		`{"output_style":{"name":"Learning"}}`:   "style Learning",
+		`{"output_style":{"name":"default"}}`:    "",
+		`{"output_style":{"name":"Default"}}`:    "",
+		`{"output_style":{"name":""}}`:           "",
+		`{"output_style":{"name":"x\u001b[2J"}}`: "style x?[2J",
+		`{}`:                                     "",
+	} {
+		p, err := payload.Parse([]byte(doc))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := plain((&renderer{p: p, st: st, dropped: map[string]bool{}}).segment("style")); got != want {
+			t.Errorf("%s: got %q, want %q", doc, got, want)
+		}
+	}
+}
+
+func TestStyleInLayouts(t *testing.T) {
+	base := fixedNow(t)
+	p := samplePayload(t, base)
+	p.OutputStyle.Name = "Learning"
+	st := sampleState(config.New(), base)
+	got := plain(Render(p, st))
+	want := "ctx 61%  5h 94% (1h20)  7d 72% (2d2h)  agents 2  compact 1 | ~/.../utils/sill  feature/billing MERGING  wt  #42 + | Fable 5.1 / high / billing-fix  style Learning  up 2h15"
+	if got != want {
+		t.Errorf("\n got %q\nwant %q", got, want)
+	}
+	// Short of room, the style goes after the duration and before the session name.
+	st.Width = visibleWidth(want) - 40
+	if got := plain(Render(p, st)); !strings.HasSuffix(got, "| Fable 5.1 / high / billing-fix") {
+		t.Errorf("fitted line = %q", got)
 	}
 }
 

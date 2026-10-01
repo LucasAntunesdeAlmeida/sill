@@ -93,6 +93,7 @@ var degradeSteps = []func(*renderer){
 	func(r *renderer) { r.noReset = true },
 	func(r *renderer) { r.dropped["version"] = true },
 	func(r *renderer) { r.dropped["duration"] = true },
+	func(r *renderer) { r.dropped["style"] = true },
 	func(r *renderer) { r.dropped["session"] = true },
 	func(r *renderer) { r.dropped["compactions"] = true },
 	func(r *renderer) { r.dropped["agents"] = true },
@@ -355,6 +356,10 @@ func (r *renderer) segment(name string) string {
 		return Clean(p.Effort.Level)
 	case "session":
 		return Clean(p.SessionName)
+	case "style":
+		if name := p.OutputStyle.Name; name != "" && !strings.EqualFold(name, "default") {
+			return r.dim("style ") + Clean(name)
+		}
 	case "version":
 		if p.Version != "" {
 			return r.dim("v" + Clean(p.Version))
