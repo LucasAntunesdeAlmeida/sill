@@ -251,7 +251,7 @@ that list changes.
 
 Claude Code writes a response into the transcript several times, once for each content block, and a
 forked subagent's transcript begins with a copy of its parent's history. sill counts each response once,
-from its most complete record. The totals were checked against a full decode of 132 real sessions.
+from its most complete record. The totals were checked against a full decode of real transcripts.
 
 ## Internals
 
