@@ -1,6 +1,6 @@
 {
   "model": {"display_name": "Fable 5.1"},
-  "workspace": {"current_dir": "$HOME/source/repos/utils/sill"},
+  "workspace": {"current_dir": "$HOME/source/repos/utils/sill", "repo": {"host": "github.com", "owner": "acme", "name": "storefront"}},
   "context_window": {"used_percentage": 61.2, "total_input_tokens": 122400, "context_window_size": 200000},
   "effort": {"level": "high"},
   "session_name": "billing-fix",

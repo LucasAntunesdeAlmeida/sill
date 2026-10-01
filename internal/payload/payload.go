@@ -18,6 +18,10 @@ type Payload struct {
 	Workspace struct {
 		CurrentDir  string `json:"current_dir"`
 		GitWorktree string `json:"git_worktree"`
+		Repo        struct {
+			Owner string `json:"owner"`
+			Name  string `json:"name"`
+		} `json:"repo"`
 	} `json:"workspace"`
 	ContextWindow struct {
 		TotalInputTokens  int      `json:"total_input_tokens"`

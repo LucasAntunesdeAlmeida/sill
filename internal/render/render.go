@@ -101,6 +101,7 @@ var degradeSteps = []func(*renderer){
 	func(r *renderer) { r.dropped["effort"] = true },
 	func(r *renderer) { r.dropped["worktree"] = true },
 	func(r *renderer) { r.dropped["pr"] = true },
+	func(r *renderer) { r.dropped["repo"] = true },
 	func(r *renderer) { r.dropped["git"] = true },
 	func(r *renderer) { r.dropped["path"] = true },
 }
@@ -290,6 +291,15 @@ func (r *renderer) segment(name string) string {
 		if start := r.st.Activity.Start; !start.IsZero() {
 			return r.dim("up ") + span(int64(Now().Sub(start).Seconds()))
 		}
+	case "repo":
+		repo := p.Workspace.Repo
+		if repo.Name == "" {
+			return ""
+		}
+		if repo.Owner == "" {
+			return Clean(repo.Name)
+		}
+		return Clean(repo.Owner + "/" + repo.Name)
 	case "path":
 		cwd := p.CurrentDir()
 		if cwd == "" {

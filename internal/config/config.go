@@ -49,6 +49,7 @@ var Options = []Option{
 	{"agents", "on", Bool, nil, "background agents still running (read from the transcript)"},
 	{"compactions", "on", Bool, nil, "times the context was compacted (read from the transcript)"},
 	{"duration", "off", Bool, nil, "time since the session started (read from the transcript)"},
+	{"repo", "off", Bool, nil, "repository owner/name from the origin remote"},
 	{"path", "on", Bool, nil, "working directory"},
 	{"git", "on", Bool, nil, "branch and merge/rebase state"},
 	{"dirty", "off", Bool, nil, "* after the branch when the tree has uncommitted changes (a second git call)"},
@@ -91,10 +92,10 @@ type Layout struct {
 // Presets are the built-in layouts.
 var Presets = map[string]Layout{
 	"compact": {Lines: []string{
-		"ctx limits cache cost agents compactions | path git worktree pr | model / effort / session duration version",
+		"ctx limits cache cost agents compactions | repo path git worktree pr | model / effort / session duration version",
 	}},
 	"full": {Lines: []string{
-		"path git worktree pr",
+		"repo path git worktree pr",
 		"ctx limits cache cost",
 		"model / effort / session duration agents compactions version",
 	}, Wide: true},

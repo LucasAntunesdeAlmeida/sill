@@ -33,7 +33,7 @@ func samplePayload(t testing.TB, base time.Time) *payload.Payload {
 	epoch := func(d time.Duration) int64 { return base.Add(d).Unix() }
 	doc := fmt.Sprintf(`{
 		"model": {"display_name": "Fable 5.1"},
-		"workspace": {"current_dir": "/home/me/source/repos/utils/sill"},
+		"workspace": {"current_dir": "/home/me/source/repos/utils/sill", "repo": {"host": "github.com", "owner": "acme", "name": "storefront"}},
 		"context_window": {"used_percentage": 61.2, "total_input_tokens": 122400, "context_window_size": 200000},
 		"effort": {"level": "high"},
 		"session_name": "billing-fix",
@@ -318,6 +318,48 @@ func TestSegments(t *testing.T) {
 		if got != c.want {
 			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
 		}
+	}
+}
+
+func TestRepoSegment(t *testing.T) {
+	s := config.New()
+	st := State{Settings: s, Layout: s.Layout()}
+	p, _ := payload.Parse([]byte(`{"workspace":{"repo":{"owner":"acme","name":"storefront"}}}`))
+	if got := (&renderer{p: p, st: st, dropped: map[string]bool{}}).segment("repo"); got != "" {
+		t.Errorf("repo is off by default, got %q", got)
+	}
+	_ = s.Set("repo", "on")
+	st.Settings = s
+	for doc, want := range map[string]string{
+		`{"workspace":{"repo":{"host":"github.com","owner":"acme","name":"storefront"}}}`: "acme/storefront",
+		`{"workspace":{"repo":{"name":"storefront"}}}`:                                    "storefront",
+		`{"workspace":{"repo":{"owner":"acme"}}}`:                                         "",
+		`{"workspace":{"repo":{"owner":"a\u001b[2J","name":"b"}}}`:                        "a?[2J/b",
+		`{}`: "",
+	} {
+		p, err := payload.Parse([]byte(doc))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := (&renderer{p: p, st: st, dropped: map[string]bool{}}).segment("repo"); got != want {
+			t.Errorf("%s: got %q, want %q", doc, got, want)
+		}
+	}
+}
+
+func TestRepoInLayouts(t *testing.T) {
+	base := fixedNow(t)
+	s := config.New()
+	_ = s.Set("repo", "on")
+	_ = s.Set("path", "off")
+	want := "ctx 61%  5h 94% (1h20)  7d 72% (2d2h)  agents 2  compact 1 | acme/storefront  feature/billing MERGING  wt  #42 + | Fable 5.1 / high / billing-fix  up 2h15"
+	if got := plain(Render(samplePayload(t, base), sampleState(s, base))); got != want {
+		t.Errorf("\n got %q\nwant %q", got, want)
+	}
+	_ = s.Set("layout", "full")
+	st := sampleState(s, base)
+	if got, _, _ := strings.Cut(plain(Render(samplePayload(t, base), st)), "\n"); got != "acme/storefront  feature/billing MERGING  wt  #42 +" {
+		t.Errorf("full layout first line = %q", got)
 	}
 }
 

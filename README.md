@@ -63,6 +63,7 @@ reserved for budgets.
 | `agents` | on | `agents 2`, background agents that have not finished | transcript |
 | `compactions` | on | `compact 1`, times the context was compacted | transcript |
 | `duration` | off | `up 2h15` since the session started | transcript |
+| `repo` | off | `acme/storefront`, the owner and name of the origin remote; `sill set repo on path off` shows it in place of the folder | payload |
 | `path` | on | `~/.../utils/sill`: home becomes `~`, then the anchor and the last two folders | payload |
 | `git` | on | the branch, or a short sha when detached, followed in red by `MERGING`, `REBASING`, `CHERRY-PICKING`, `REVERTING` or `BISECTING` | `.git/HEAD` |
 | `dirty` | off | `*` after the branch if tracked files have uncommitted changes; costs one more `git` call | `git status` |
@@ -122,7 +123,7 @@ stdout is a pipe to Claude Code, so sill asks the console directly for its width
 console API or `/dev/tty`. When a line is too long it drops detail in a fixed order rather than wrap.
 First the path shortens to `~/.../sill`, then to `sill`; then limits lose their reset times; then
 whole segments go, in this order: `version`, `duration`, `session`, `compactions`, `agents`, `cache`,
-`cost`, `effort`, `worktree`, `pr`, `git`, `path`. The budgets and the model are the last to go.
+`cost`, `effort`, `worktree`, `pr`, `repo`, `git`, `path`. The budgets and the model are the last to go.
 
 Width is measured in terminal columns, so Chinese, Japanese or Korean characters and emoji in a folder
 or session name take two columns each. `sill settings` shows the width sill detected; if it reports
